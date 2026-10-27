@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "session-rerank"
+version = "0.1.0"
+description = "Reproducible Diginetica session-aware diversification benchmark"
+requires-python = ">=3.11"
+dependencies = ["numpy>=1.26,<2", "pandas>=2.2,<3", "scipy>=1.12,<1.13", "scikit-learn>=1.5,<1.6", "lightgbm", "matplotlib>=3.9,<3.10", "pyarrow>=14,<15", "requests", "recbole==1.2.1", "torch>=2.5,<2.6", "setuptools<81", "protobuf>=4.25,<5", "tensorboard>=2.18,<2.19"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

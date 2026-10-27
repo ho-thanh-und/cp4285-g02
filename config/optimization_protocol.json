@@ -1,0 +1,29 @@
+{
+  "version": 2,
+  "seed": 4285,
+  "recbole_required": true,
+  "purpose": "Improve same full-candidate query-ranking task; preserve first experiment unchanged",
+  "train_dates": [
+    "2016-04-01",
+    "2016-04-29"
+  ],
+  "train_query_cap": 60000,
+  "validation": "Same 6000 sampled validation queries as v1; full original candidate lists",
+  "confirmation_dates": [
+    "2016-05-16",
+    "2016-06-01"
+  ],
+  "confirmation_queries": 10000,
+  "confirmation_sampling_seed": 20261026,
+  "confirmation_exclusion": "Exclude every supplied sessionId appearing anywhere in the original test sample before sampling; no confirmation target analysis before selection freeze",
+  "confirmation_query_ids_sha256": "d43bae3ec0c4940a0061d25b49defe9a5f149a6806269a2969d82becec0802ae",
+  "history": "Same provided sessionId and date, strictly prior timestamped query clicks, most recent 10 distinct products",
+  "statistics": "For train queries source dates <= query date minus 2 days; validation statistics capped at 2016-04-29; confirmation statistics capped at 2016-05-14",
+  "recbole_training": "Source-query clicks before 2016-04-30, daily-session pseudousers, deduplicated exact events; no validation or confirmation labels",
+  "selection": "Validation NDCG@10 for relevance models; validation lexical ILD maximum within 2% relative NDCG budget for reranking",
+  "confirmation_use": "Evaluate frozen selected model/policy once; report paired session-cluster confidence intervals versus original model on same queries",
+  "limits": "Same overall date period as prior inspected test, new supplied-session-disjoint outcome sample. Not an independent dataset or new temporal replication.",
+  "optional_view_features": "Separate 48-feature models assume shared relative timeframe clocks for same sessionId/date. Use strict view time < query time; retain 40-feature no-view control. Added during validation development before confirmation.",
+  "validation_search": "12/40/48 features; 20k/60k query caps; LightGBM leaves 31/63; RecBole GRU4Rec BPR max15 epochs, early stop4; seven tree models plus original reference; gated score-fusion tree weights 0,.25,.5,.75,.9,.95,1",
+  "secondary_diversity_metric": "Token cosine ILD@10 as a distance robustness check, while optimizing Jaccard ILD"
+}

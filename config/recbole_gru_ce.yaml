@@ -1,0 +1,11 @@
+model: GRU4Rec
+loss_type: CE
+train_neg_sample_args: null
+embedding_size: 64
+hidden_size: 128
+dropout_prob: 0.2
+learning_rate: 0.003
+train_batch_size: 1024
+epochs: 8
+stopping_step: 2
+checkpoint_dir: results/iteration3/recbole_saved

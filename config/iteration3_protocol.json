@@ -1,0 +1,22 @@
+{
+  "version": 3,
+  "seed": 4285,
+  "confirmation_sampling_seed": 20261028,
+  "confirmation_queries": 10000,
+  "confirmation_query_ids_sha256": "b997c8051a4598558525a5d3325983f06851324ba63b056fad0ae29c75714758",
+  "exclusions": "All supplied sessionIds in v1 test and v2 reserved confirmation samples; reserve before new fitting or outcomes",
+  "training": "Same 59,594 evaluable April training queries as v2; same 5,932 validation queries",
+  "models": [
+    "RecBole GRU4Rec cross-entropy",
+    "RecBole SASRec cross-entropy",
+    "causal item co-occurrence and prior user context plus LambdaMART"
+  ],
+  "collaborative_cutoffs": "Train Apr1-7: Mar30; Apr8-14: Apr6; Apr15-21: Apr13; Apr22-29: Apr20. Validation: Apr29. Confirmation: May14.",
+  "model_selection": "Validation NDCG@10; test new feature models and simple validated score combinations; freeze before final sample",
+  "target": "All original query candidates, same binary click target, same NDCG@10; no easier subset or sampled candidates",
+  "limitations": "Third same-period sample, not independent temporal replication. Preserve and disclose every prior experiment.",
+  "selection_queries": 8000,
+  "selection_sampling_seed": 20261029,
+  "selection_query_ids_sha256": "08c35a497d14c249fc1aa92df665ab26d0b8de4c86dd61876e42bde778ecd683",
+  "selection_rule": "Fresh same-date development query sample excluding original validation session IDs. Open once after candidate fitting; select highest mean NDCG and freeze before new confirmation."
+}

@@ -1,0 +1,77 @@
+# Local documentation, references and presentation materials
+/docs/
+/slides/
+/presentations/
+/references/
+/attachments/
+*.pdf
+*.ppt
+*.pptx
+*.odp
+*.key
+*.doc
+*.docx
+
+# Downloaded data and reproducible experiment outputs
+/data/
+/results/
+/output/
+/outputs/
+/checkpoints/
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.7z
+*.rar
+
+# Python environments, packaging and bytecode
+.venv/
+.venv-*/
+venv/
+env/
+.env/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+/build/
+/dist/
+
+# Test, notebook and tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.codebase-memory/
+/log/
+/saved/
+/log_tensorboard/
+
+# Local settings and credentials
+.vscode/
+.idea/
+.history/
+.env
+.env.*
+!.env.example
+!.env.sample
+.python-version
+
+# Temporary files, logs and operating-system metadata
+/tmp/
+/temp/
+*.log
+*.tmp
+*.part
+*.swp
+*.swo
+*~
+.DS_Store
+._*
+Thumbs.db
+Desktop.ini

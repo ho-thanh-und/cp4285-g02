@@ -1,0 +1,48 @@
+# Actual RecBole model, dataset, sampler and Trainer configuration.
+model: GRU4Rec
+dataset: diginetica_session
+data_path: data/recbole
+USER_ID_FIELD: user_id
+ITEM_ID_FIELD: item_id
+TIME_FIELD: timestamp
+load_col:
+  inter: [user_id, item_id, timestamp]
+user_inter_num_interval: '[2,inf)'
+item_inter_num_interval: '[2,inf)'
+MAX_ITEM_LIST_LENGTH: 10
+ITEM_LIST_LENGTH_FIELD: item_length
+LIST_SUFFIX: _list
+embedding_size: 64
+hidden_size: 64
+num_layers: 1
+dropout_prob: 0.1
+loss_type: BPR
+train_neg_sample_args:
+  distribution: uniform
+  sample_num: 1
+  alpha: 1.0
+  dynamic: false
+  candidate_num: 0
+train_batch_size: 1024
+eval_batch_size: 2048
+epochs: 15
+learning_rate: 0.003
+weight_decay: 0.000001
+eval_step: 1
+stopping_step: 4
+eval_args:
+  split:
+    RS: [1.0, 0.0, 0.0]
+  group_by: user
+  order: TO
+  mode: full
+metrics: [NDCG, Recall]
+topk: [10]
+valid_metric: NDCG@10
+valid_metric_bigger: true
+seed: 4285
+reproducibility: true
+use_gpu: false
+show_progress: false
+log_wandb: false
+checkpoint_dir: results/optimization/recbole_saved
