@@ -1,10 +1,8 @@
 # Local documentation, references and presentation materials
-/docs/
 /slides/
 /presentations/
 /references/
 /attachments/
-*.pdf
 *.ppt
 *.pptx
 *.odp
@@ -14,7 +12,8 @@
 
 # Downloaded data and reproducible experiment outputs
 /data/
-/results/
+/results/*
+!/results/shared/
 /output/
 /outputs/
 /checkpoints/

@@ -1,0 +1,41 @@
+# Literature supporting the session benchmark
+
+The behavioral literature motivates testable hypotheses. It does not establish that every shopping session moves monotonically from exploration to purchase, or that exactly 10% of preferences are revealed early. Those numerical claims are not used as measured facts in this experiment.
+
+| Source | Supported connection and limit |
+|---|---|
+| [Häubl & Trifts (2000), Marketing Science 19(1), 4–21](https://pubsonline.informs.org/doi/10.1287/mksc.19.1.4.15178) | Their simulated-store study discusses initial screening followed by more detailed comparison, and tests decision aids for these tasks. It supports investigating session stages, without establishing a universal stage-transition time or a diversity optimum. |
+| [Moe (2003), Journal of Consumer Psychology 13(1–2), 29–39](https://www.sciencedirect.com/science/article/abs/pii/S1057740803701740) | Clickstream navigation distinguishes types of shopping visits with different objectives and purchase likelihoods. It supports behavioral heterogeneity, rather than assuming all visits follow the same progression. |
+| [Pirolli & Card (1999), Psychological Review 106(4), 643–675](https://doi.org/10.1037/0033-295X.106.4.643) | Information-foraging theory provides a general framework for seeking valuable information. Bibliography and abstract were available in indexed records; publisher access failed in this session. It does not determine the experiment's numerical decay factors. |
+| [Slovic (1995), American Psychologist 50(5), 364–371](https://bear.warrington.ufl.edu/brenner/mar7588/Papers/slovic-ampsy1995.pdf) | This article reviews context-dependent construction of preferences. It motivates testing sensitivity to recent observations, without identifying a causal preference change from anonymized product tokens. |
+| [Joachims et al. (2005), SIGIR, 154–161](https://www.cs.cornell.edu/~tj/publications/joachims_etal_05a.pdf) | The eye-tracking study finds clicks informative but biased and examines relative preferences extracted from clicks. SkipAbove is used here as a heuristic examination signal, not a guarantee that every higher-ranked item was examined. |
+| [Joachims, Swaminathan & Schnabel (2017), WSDM, 781–789](https://www.cs.cornell.edu/~tj/publications/joachims_etal_17a.pdf) | This paper derives propensity-weighted learning under a counterfactual framework. The present experiment lacks an identified propensity model and therefore does not call simple negative weighting unbiased off-policy evaluation. |
+| [Gharahighehi & Vens (2021), SN Computer Science 2, 39](https://link.springer.com/article/10.1007/s42979-020-00399-2) | The publisher abstract describes balancing diversity and accuracy with sequential-rule and session-kNN methods on music datasets. Full text is subscription-only; the institutional repository also requires a copy request. The implemented median session-diversity threshold is explicitly a project heuristic, pending verification against the full algorithm. No request was sent to the authors. |
+| [Yin et al., Understanding Diversity in Session-Based Recommendation, author preprint revised 2023](https://arxiv.org/abs/2208.13453) | The study reports that accuracy and diversity have a complex relationship and that some non-diversified methods can perform well on diversity. It supports keeping strong relevance-only and fixed-diversity controls. |
+| [Gharahighehi & Vens, Diversification in Session-Based News Recommendation](https://arxiv.org/abs/2102.03265) | The accessible paper's Eq. 11 weights session-kNN scores by candidate-to-session diversity. The Retailrocket comparator transfers this candidate rule to property-token Jaccard distance; it does not reproduce news embeddings, the neighbor-diversity variant, or the unavailable music-paper threshold rule. |
+
+The music-paper access check was repeated against the [imec institutional record](https://imec-publications.be/entities/publication/d70e4f83-3002-4bfe-87f6-4b7172daf79e). Its visible file link directs to a request-a-copy form. No copy request was sent and no restricted download was attempted.
+
+The report must distinguish empirical results on Diginetica from the above motivation. Token Jaccard diversity measures lexical differences in anonymized names. It does not demonstrate shopper satisfaction, perceived variety, sales impact, or the benefit of asking an interactive clarification question.
+
+## Additional external evidence checked on 31 October 2026
+
+These are research notes for the project, not a report or presentation draft.
+
+| Primary source | Evidence and implication for this project |
+|---|---|
+| [Ludewig, Mauro, Latifi & Jannach (2021), Empirical analysis of session-based recommendation algorithms](https://doi.org/10.1007/s11257-020-09277-1) | Their controlled comparison includes twelve algorithms, including six neural methods; simple neighbor methods remain competitive. This supports preserving strong simple baselines and matched evaluation, not asserting our tree beats every neural system. Their music user study is external evidence about those methods and participants, not validation of our shopper experience. Open author code: [session-rec](https://github.com/rn5l/session-rec). |
+| [Wang (2023), Exploring Popularity Bias in Session-based Recommendation](https://arxiv.org/abs/2312.07855) | This preprint studies popularity strata in session recommendation and shows that aggregate model comparisons can hide differences across strata. We adopt descriptive popularity slices. We do not adopt its estimated propensities as identified exposure probabilities, nor use target-defined strata as serving gates. |
+| [Klimashevskaia et al. (2023), Evaluating The Effects of Calibrated Popularity Bias Mitigation: A Field Study](https://christophtrattner.com/pubs/RecSys_2023_LBR.pdf) | TV 2 Play deployed calibrated-popularity reranking in an A/B study. Table 1 reports mixed CTR changes across phases: +1.25%, -4.18%, +2.25%; phases also change the threshold or algorithm. This supports testing calibration and visibility in deployment, not assuming more variety always improves engagement. Their viewport-driven K adjustment cannot justify changing our prespecified primary K=10 after seeing results. |
+| [Yin et al. (2023), Understanding Diversity in Session-Based Recommendation, v2](https://arxiv.org/html/2208.13453v2) | Section 4.3 examines category granularity, session composition and list length as influences on measured diversity. This strengthens the need to distinguish lexical diversity, category diversity and human-perceived variety. Published comparison code: [Understanding-Diversity-in-SBRSs](https://github.com/qyin863/Understanding-Diversity-in-SBRSs). No external model implementation was executed or claimed reproduced in this search. |
+
+### Applied improvement: opportunity and target-popularity diagnostics
+
+`src/session_rerank/popularity_diagnostics.py` adds a bounded diagnostic to the existing frozen models. All 5%, 10% and 20% head definitions are retained, using historical counts and deterministic ties. Results go to `results/submission/popularity_diagnostics/`.
+
+- Exposure is compared with the expected head share from uniform selection within each supplied list, respecting lists shorter than ten. This reference measures available opportunity; it is not an ethical or utility optimum.
+- Mutually exclusive head-only, tail-only and mixed-click query strata expose aggregate masking. Paired session-bootstrap intervals compare the existing hybrid and its tree; they remain exploratory and unadjusted.
+- At the 10% head definition, uniform candidate opportunity implies 37.93% head exposure, clicked-item share is 60.73%, and tree/hybrid recommendation shares are 79.79%/80.21%. Click share is itself exposure-confounded, not a fair target distribution.
+- On 13,610 tail-only target queries, tree/hybrid NDCG is .13239/.13129; on 23,176 head-only target queries, the hybrid has a small positive increment. This helps explain why its near-zero aggregate NDCG increment can hide opposing segment effects. It does not identify niche users or support selecting a new policy from confirmation.
+
+External findings motivate these checks; they do not replace project-specific interaction outcomes or identify missing propensities.

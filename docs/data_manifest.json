@@ -1,0 +1,17 @@
+{
+  "folder_url": "https://drive.google.com/drive/folders/0B7XZSACQf0KdXzZFS21DblRxQ3c?resourcekey=0-3k4O5YlwnZf0cNeTZ5Y_Uw",
+  "files": [
+    {
+      "name": "dataset-train-diginetica.zip",
+      "file_id": "0B7XZSACQf0KdenRmMk8yVUU5LWc",
+      "bytes": 372730392,
+      "sha256": "b7f22f76d5a058978f913a4bdfa9cd1ecd87dd32037cd73e2e39b41857d28f3a"
+    },
+    {
+      "name": "diginetica_baseline.py",
+      "file_id": "0B7XZSACQf0KdU3JweDMzZUxyemM",
+      "bytes": 2934,
+      "sha256": "bc3464ffcf545abf71ca7e6645a7d1ed46f46190bd2369ab138a90e94b0bdc69"
+    }
+  ]
+}
