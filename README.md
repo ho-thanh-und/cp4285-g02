@@ -99,11 +99,14 @@ Windows/Linux, and the default `dev` group for pytest. The older
 `requirements*.lock.txt` files record earlier environments and are not the
 installation source for this uv setup.
 
-The local checkout's `data/raw` files link to the existing Diginetica CSVs in
-its sibling dataset directory, so they do not consume another full dataset
-copy. Treat raw CSVs as read-only: edits to a hard-linked file also affect its
-original path. Other machines must supply the six CSVs in `data/raw` or allow
-the pipeline's public-data downloader to obtain them.
+The six original Diginetica CSVs live directly in this repository's `data/raw`
+folder. The local dataset was consolidated here from the parent folder without
+copying or changing the CSV contents. The local move record, including file sizes
+and SHA-256 checksums, is `data/source/dataset_relocation.json`.
+
+Treat raw CSVs as read-only. The `/data/` rule in `.gitignore` keeps these large
+local files out of Git commits. Other machines must supply the six CSVs in
+`data/raw` or allow the pipeline's public-data downloader to obtain them.
 
 ## Saved results and restarting
 
