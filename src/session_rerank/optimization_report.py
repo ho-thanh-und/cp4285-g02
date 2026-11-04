@@ -23,6 +23,12 @@ METRICS=['ndcg10','recall10','jaccard_ild10','cosine_ild10']
 
 
 def hybrid_scores(base,neural,data,weight):
+    """Return combined tree/neural relevance scores for each query.
+
+    weight is the tree contribution; 1-weight is the neural contribution.
+    Normalize each query's two score vectors before mixing. Queries without
+    click history retain their original tree scores.
+    """
     result=np.array(base,copy=True)
     for j,(a,b) in enumerate(zip(data['offsets'][:-1],data['offsets'][1:])):
         # Neural scores add information only when a query has a click prefix.
@@ -32,6 +38,12 @@ def hybrid_scores(base,neural,data,weight):
 
 
 def all_metrics(order,relevance,jaccard,cosine):
+    """Return NDCG, recall, Jaccard ILD, and cosine ILD for one ranked list.
+
+    order contains candidate positions and relevance contains click labels.
+    jaccard/cosine are pairwise token-distance matrices. ILD is the mean
+    distance between the recommended products, measuring name-token variety.
+    """
     a,b,c=ranking_metrics(order,relevance,jaccard)
     k=len(order)
     d=float(cosine[np.ix_(order,order)].sum()/(k*(k-1))) if k>1 else 0.
@@ -39,6 +51,14 @@ def all_metrics(order,relevance,jaccard,cosine):
 
 
 def evaluate(data,scores,rerank_scores=None):
+    """Measure every score vector on the same query candidate lists.
+
+    data supplies candidates, labels, query boundaries, and histories;
+    scores maps method names to flattened relevance predictions. Optional
+    rerank_scores also triggers a sweep of relevance/diversity weights.
+    Return (per-method metric arrays, weight-sweep metrics, example lists).
+    Metric order is NDCG, recall, Jaccard ILD, cosine ILD.
+    """
     catalog=Catalog()
     values={name:np.empty((len(data['meta']),4)) for name in scores}
     sweep=np.empty((len(data['meta']),len(WEIGHTS),4)) if rerank_scores is not None else None
@@ -70,6 +90,13 @@ def evaluate(data,scores,rerank_scores=None):
 
 
 def policy_search(data,metrics):
+    """Choose the best policy in each diversification family on validation.
+
+    data supplies history length/diversity; metrics contains the measured
+    per-query outcomes for every weight. Compare fixed weights, history
+    gates, diversity thresholds, and progression rules via choose().
+    Return policy dictionaries respecting the 2% relevance-loss budget.
+    """
     meta=data['meta']
     candidates={
         'fixed':[dict(kind='fixed',weight=float(w)) for w in WEIGHTS],
@@ -90,6 +117,12 @@ def policy_search(data,metrics):
 
 
 def freeze():
+    """Select and freeze models/policies for the earlier optimization experiment.
+
+    This older workflow uses validation for model and policy selection and
+    writes results/optimization. The current main.py instead selects models
+    through pipeline/comparison.py on a separate fresh selection sample.
+    """
     if (OUT/'frozen_selection.json').exists():raise RuntimeError('Selection already frozen')
     data=load_features('validation')
     models={}
@@ -139,6 +172,12 @@ def freeze():
 
 
 def confirmation():
+    """Evaluate the earlier optimization experiment's frozen choices once.
+
+    Check model/configuration hashes, score its reserved confirmation sample,
+    and save metrics/reports under results/optimization. Current main.py uses
+    pipeline/evaluation.py with a different reserved confirmation sample.
+    """
     if (OUT/'confirmation_per_query.npz').exists():raise RuntimeError('Confirmation already evaluated; reuse the saved report')
     frozen=json.loads((OUT/'frozen_selection.json').read_text())
     if frozen['protocol_sha256']!=file_hash('config/optimization_protocol.json') or frozen['recbole_config_sha256']!=file_hash('config/recbole_gru4rec.yaml'):
@@ -176,6 +215,13 @@ def confirmation():
 
 
 def save_report(split,data,values,sweep):
+    """Save metric averages, uncertainty intervals, comparisons, and subgroup tables.
+
+    split labels the files; data provides sessions and metadata; values maps
+    methods to per-query metrics; sweep contains weight-grid measurements.
+    Resample sessions together to preserve within-session dependence, then
+    create charts. Output goes to the module's OUT folder.
+    """
     names=list(values)
     array=np.stack(list(values.values()),axis=1)
     bootstrap=cluster_bootstrap(array,data['meta'].session_id.to_numpy())
@@ -221,6 +267,11 @@ def save_report(split,data,values,sweep):
 
 
 def plot(split,values,sweep):
+    """Save relevance comparison and relevance-versus-variety charts for split.
+
+    values supplies method metrics; sweep supplies outcomes across fixed
+    weights. Uses already calculated results and saves PNGs to OUT/figures.
+    """
     directory=OUT/'figures'
     directory.mkdir(exist_ok=True)
     plt.rcParams.update({'font.size':11,'axes.spines.top':False,'axes.spines.right':False})
@@ -255,6 +306,7 @@ def plot(split,values,sweep):
 
 
 def main():
+    """Dispatch the earlier optimization freeze/confirmation/report command."""
     parser=argparse.ArgumentParser()
     parser.add_argument('action',choices=['freeze','confirmation','report'])
     args=parser.parse_args()

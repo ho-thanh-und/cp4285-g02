@@ -19,7 +19,14 @@ FEATURES = ["position_fraction", "reciprocal_position", "log_clicks", "smoothed_
 
 
 class Catalog:
+    """Product lookup tables shared by feature building and evaluation."""
     def __init__(self):
+        """Load product tokens, prices, categories, and pre-April popularity.
+
+        Build a sparse product/token matrix for fast similarity calculations.
+        Product IDs map to row positions through self.row; they are not
+        themselves array row numbers.
+        """
         p = pd.read_csv('data/raw/products.csv', sep=';')
         c = pd.read_csv('data/raw/product-categories.csv', sep=';')
         self.ids = p.itemId.to_numpy()
@@ -44,6 +51,12 @@ class Catalog:
         self.exposure = dict(zip(exposure.itemId, exposure.exposures))
 
     def similarity(self, ids, other=None):
+        """Return pairwise token Jaccard similarity for product IDs.
+
+        ids supplies the rows and other supplies the columns. If other is
+        omitted, compare ids against themselves. Values near 1 mean the
+        product names share many tokens.
+        """
         other = ids if other is None else other
         a = np.array([self.row[x] for x in ids])
         b = np.array([self.row[x] for x in other])
@@ -52,6 +65,12 @@ class Catalog:
         return np.divide(intersection, union, out=np.zeros_like(intersection), where=union>0)
 
     def features(self, items, history, query_tokens, query_category):
+        """Return the original 12 ranking features for each candidate product.
+
+        items is the ordered candidate list; history contains earlier clicks,
+        newest first. Query tokens/category describe the current search.
+        Output has one row per candidate, with columns in FEATURES order.
+        """
         n = len(items)
         hist = self.similarity(items,history) if history else np.zeros((n,1),dtype=np.float32)
         pop = np.array([self.pop[x] for x in items])
@@ -67,6 +86,13 @@ class Catalog:
 
 
 def load_examples(name, catalog):
+    """Load an original train/validation/test sample and build ranking examples.
+
+    Each returned dictionary has candidate IDs, click labels, earlier session
+    history, query metadata, and a feature matrix. Exclude queries without
+    an observed positive candidate or with missing product/token data.
+    Save an eligibility audit as well as returning the example list.
+    """
     q = pd.read_parquet(f'data/processed/{name}.parquet')
     keys = set(zip(q.sessionId,q.eventdate))
     clicks = pd.read_parquet('data/processed/clicks.parquet')
@@ -109,6 +135,12 @@ def load_examples(name, catalog):
 
 
 def train(examples):
+    """Fit the original LambdaMART reference on the supplied query examples.
+
+    Keep candidate rows grouped by query so the model learns ranking within
+    a search. Save results/model.txt and feature importance; return the
+    fitted LightGBM Booster for scoring.
+    """
     X = np.concatenate([x['features'] for x in examples])
     y = np.concatenate([x['relevance'] for x in examples])
     group = [len(x['items']) for x in examples]
@@ -123,6 +155,13 @@ def train(examples):
 
 
 def evaluate(examples, catalog, model, name):
+    """Measure the reference model and simple baselines on the same examples.
+
+    For each query, predict scores, try the original diversification weight
+    grid, and calculate NDCG, recall, and token variety. name labels the
+    output split. Save metric caches, metadata, recommendation examples,
+    and timing under results/; returns nothing.
+    """
     output = Path('results/cache')
     output.mkdir(parents=True,exist_ok=True)
     all_features = np.concatenate([x['features'] for x in examples])
@@ -163,7 +202,12 @@ def evaluate(examples, catalog, model, name):
 
 
 def develop_reference_model():
-    """Fit the original reference ranker and evaluate its validation sample."""
+    """Train the original reference and save its validation measurements.
+
+    Reads the original training/validation samples through Catalog and
+    load_examples(). This is the reference-model part of stage 2; no held-out
+    test or new confirmation outcomes are used here.
+    """
     if Path('results/frozen_policies.json').exists():
         raise RuntimeError('This experiment is frozen. Reuse its recorded reference model.')
     catalog = Catalog()
@@ -174,6 +218,11 @@ def develop_reference_model():
 
 
 def main():
+    """Dispatch the older reference-model development/test command.
+
+    Test evaluation requires frozen policies and unchanged model/protocol
+    fingerprints; development trains the original reference model.
+    """
     parser=argparse.ArgumentParser()
     parser.add_argument('--stage',choices=['development','test'],default='development')
     args=parser.parse_args()

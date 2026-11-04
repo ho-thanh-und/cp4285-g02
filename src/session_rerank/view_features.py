@@ -19,6 +19,14 @@ VIEW_NAMES=['prior_view_exact','prior_view_recency','prior_view_max_similarity',
 
 
 def build(split,root=None,output=None,freeze_path='results/optimization/frozen_selection.json'):
+    """Append eight earlier-view features to the saved candidate feature matrix.
+
+    For each query, use only views from its session/date with a strictly
+    earlier relative timestamp. Features describe exact repeats, recency,
+    product-name similarity, history size, price difference, and view age.
+    Save features_views.npy and a coverage audit. root/output choose the
+    data/results folders; confirmation requires frozen model choices.
+    """
     root=ROOT if root is None else Path(root)
     output=Path('results/optimization') if output is None else Path(output)
     if split=='confirmation' and not Path(freeze_path).exists():
@@ -73,6 +81,7 @@ def build(split,root=None,output=None,freeze_path='results/optimization/frozen_s
 
 
 def main():
+    """Read --split and build that sample's earlier-view feature cache."""
     parser=argparse.ArgumentParser()
     parser.add_argument('--split',choices=['train','validation','confirmation'],required=True)
     build(parser.parse_args().split)

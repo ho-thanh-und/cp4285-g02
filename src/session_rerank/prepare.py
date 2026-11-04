@@ -16,7 +16,14 @@ SPLITS = {
 
 
 def audit_and_split(raw=Path("data/raw")):
-    """Read and audit CSVs, then save the original benchmark samples."""
+    """Audit the six CSVs in raw, then save the original benchmark samples.
+
+    Check product/query IDs, click timing, candidate coverage, and missing
+    data. Keep visible-label queries and sample separate date ranges for
+    training, validation, and the original test. Also save click/exposure
+    tables used to build features. Writes data/processed and a JSON audit
+    under results/; returns nothing.
+    """
     output = Path("data/processed")
     output.mkdir(parents=True, exist_ok=True)
     q = pd.read_csv(raw / "train-queries.csv", sep=";", dtype={"searchstring.tokens": "str", "items": "str"})
@@ -93,6 +100,7 @@ def audit_and_split(raw=Path("data/raw")):
 
 
 def main():
+    """Read the optional --raw directory and run the original data audit."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--raw", type=Path, default=Path("data/raw"))
     args = parser.parse_args()

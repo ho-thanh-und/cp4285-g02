@@ -14,6 +14,11 @@ from .policies import file_hash
 
 
 def neural(variant,split):
+    """Return cached neural scores, creating them in a separate process if absent.
+
+    variant chooses BPR GRU4Rec, CE GRU4Rec, or CE SASRec; split chooses the
+    sample. Cached arrays avoid repeatedly running model inference.
+    """
     path=OUT/f'{variant}_{split}.npy'
     if not path.exists():
         subprocess.run([sys.executable,'-m','session_rerank.neural_search','score','--variant',variant,'--split',split],check=True)
@@ -21,6 +26,11 @@ def neural(variant,split):
 
 
 def tree_prediction(name,data,split):
+    """Load a named tree and return one relevance score per candidate.
+
+    previous_* models use the earlier feature matrix. Contextual trees use
+    the collaborative matrix and the exact columns saved during training.
+    """
     if name.startswith('previous_'):
         original=name.removeprefix('previous_')
         model=lgb.Booster(model_file=f'results/optimization/{original}.txt')
@@ -30,6 +40,13 @@ def tree_prediction(name,data,split):
 
 
 def score_descriptor(descriptor,split,data,cache):
+    """Interpret a model description and return its candidate relevance scores.
+
+    descriptor selects a tree, neural model, previous hybrid, or new fusion.
+    data supplies the query groups and features; cache avoids repeating work
+    for the same descriptor within this comparison. Fusion mixes normalized
+    tree/neural scores only when click history is available.
+    """
     key=json.dumps(descriptor,sort_keys=True)
     if key in cache:return cache[key]
     kind=descriptor['kind']
@@ -48,6 +65,11 @@ def score_descriptor(descriptor,split,data,cache):
 
 
 def fingerprints():
+    """Return file-path to SHA-256 mappings for searched models and key configs.
+
+    Save these fingerprints before fresh selection so later stages can
+    detect whether fitted weights/configurations have changed.
+    """
     paths=['config/iteration3_protocol.json','config/recbole_gru_ce.yaml','config/recbole_sas_ce.yaml',
            'results/optimization/recbole_gru4rec.pth','results/optimization/views_60k.txt','results/optimization/views_60k_63.txt']
     paths += [str(p) for p in OUT.glob('*.pth')]
@@ -56,7 +78,10 @@ def fingerprints():
 
 
 def select():
-    """Legacy selection command, using the same comparison and policy stages."""
+    """Run steps 3/4 and freeze their choices through the older select command.
+
+    This compatibility entry point does not evaluate confirmation queries.
+    """
     from .pipeline.comparison import compare_models
     from .pipeline.diversification import choose_diversification
     from .pipeline.evaluation import freeze_choices
@@ -67,12 +92,16 @@ def select():
 
 
 def verify(frozen):
+    """Reject any model/configuration whose bytes differ from the frozen hashes."""
     for path,digest in frozen['hashes'].items():
         if file_hash(path)!=digest:raise RuntimeError(f'Frozen input changed: {path}')
 
 
 def confirm():
-    """Legacy confirmation command; cached outcomes can regenerate reports."""
+    """Run frozen confirmation evaluation and reporting through the older command.
+
+    Reuses cached confirmation outcomes when available, just like main.py.
+    """
     from .pipeline.state import ModelComparison, read_json
     from .pipeline.evaluation import freeze_and_evaluate
     from .pipeline.reporting import save_results
@@ -82,6 +111,13 @@ def confirm():
 
 
 def report(values=None,sweep=None,data=None):
+    """Write final tables/statistics/charts from confirmation metric arrays.
+
+    values maps methods to per-query metrics; sweep contains all tested
+    weights; data supplies session/query metadata. If omitted, read the
+    saved cache. Include paired session-bootstrap comparisons against the
+    previous hybrid. Save files under results/iteration3; returns nothing.
+    """
     import session_rerank.optimization_report as reporting
     reporting.OUT=OUT
     if values is None:
@@ -106,6 +142,12 @@ def report(values=None,sweep=None,data=None):
 
 
 def figures(values):
+    """Save the confirmation model-comparison chart and optional identity chart.
+
+    values contains measured method results. Read summary-table confidence
+    intervals for the model plot; plot missing-user coverage if its audit
+    CSV is present. Figures are saved under results/iteration3/figures.
+    """
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
@@ -135,6 +177,7 @@ def figures(values):
 
 
 def main():
+    """Dispatch the older select, confirm, or report command."""
     parser=argparse.ArgumentParser();parser.add_argument('action',choices=['select','confirm','report'])
     action=parser.parse_args().action
     {'select':select,'confirm':confirm,'report':report}[action]()

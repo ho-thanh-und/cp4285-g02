@@ -7,7 +7,14 @@ from .state import (
 
 
 def _nominate_models():
-    """Use original validation data to nominate the same five candidate types."""
+    """Reduce the validation search to five representative candidates.
+
+    A descriptor is a small dictionary saying how to compute scores, for
+    example {"kind": "tree", "name": "collab31"}. Compare individual trees,
+    neural models, the previous hybrid, and several tree/neural mixtures.
+    Returns nominee descriptors, validation scores, and model-file hashes.
+    Confirmation data is never used to nominate candidates.
+    """
     from .. import iteration3_report as scoring
 
     for name in ("collab31", "collab63", "anonymous31", "gru_ce", "sas_ce"):
@@ -19,6 +26,11 @@ def _nominate_models():
     records = []
 
     def assess(descriptor):
+        """Score one model description on validation and remember its mean NDCG@10.
+
+        NDCG rewards clicked items appearing near the top of the list.
+        Returns the descriptor and score, also appending them to records.
+        """
         scores = scoring.score_descriptor(descriptor, "validation", validation, cache)
         value = float(scoring.ndcg_by_query(
             scores, validation["y"], validation["offsets"]
@@ -34,12 +46,16 @@ def _nominate_models():
                       for name in ("gru_ce", "sas_ce")]
     previous = assess(dict(kind="previous"))
     best_tree = max(tree_results, key=lambda row: row["validation_ndcg10"])
+    # Try both neural models with several tree contributions. A weight of
+    # .9 means 90% tree score and 10% neural score for nonempty click histories.
     fusions = [
         assess(dict(kind="fusion", tree=best_tree["descriptor"]["name"],
                     neural=neural, weight=weight))
         for neural in ("gru_ce", "sas_ce")
         for weight in (.25, .5, .75, .9, .95)
     ]
+    # Only these five representatives enter the fresh selection comparison.
+    # This keeps the large validation search separate from the final choice.
     nominees = dict(
         previous_hybrid=previous["descriptor"],
         best_tree=best_tree["descriptor"],
@@ -51,6 +67,13 @@ def _nominate_models():
 
 
 def compare_models():
+    """Choose the relevance model using the separate model-selection sample.
+
+    Validation nominates five candidates; fresh selection picks the highest
+    mean NDCG@10 among them. Saved scores are reused when restarting.
+    Returns a ModelComparison containing the winner, other candidates,
+    measured scores, and hashes identifying the exact fitted models.
+    """
     from .. import iteration3_report as scoring
     import pandas as pd
 
@@ -88,6 +111,7 @@ def compare_models():
         pd.DataFrame(rows).to_csv(temporary, index=False)
         temporary.replace(SELECTION_SCORES)
 
+    # Choose using fresh selection scores, not confirmation outcomes.
     rows = pd.read_csv(SELECTION_SCORES, float_precision="round_trip")
     means = dict(zip(rows.candidate, rows.ndcg10))
     return ModelComparison(

@@ -30,16 +30,27 @@ FEATURE_NAMES = FEATURES + STAT_NAMES + EXTRA_NAMES
 
 
 def day_index(value):
+    """Convert an ISO date to a zero-based day index starting at 2016-01-01."""
     return date.fromisoformat(str(value)).toordinal() - ORIGIN
 
 
 def available_day(query_date, cap_date=None):
+    """Return the latest day allowed to contribute historical statistics.
+
+    Stop two calendar days before query_date, leaving a one-day embargo.
+    An optional cap_date prevents validation/confirmation outcomes from
+    entering the statistics used to predict those same samples.
+    """
     end = day_index(query_date) - 2
     return min(end, day_index(cap_date)) if cap_date else end
 
 
 def known_item_rows(item_ids,id_to_row):
-    """Return valid event positions and catalog rows; unknown IDs never index -1."""
+    """Map event product IDs to valid catalog rows, excluding unknown IDs.
+
+    Returns (event_positions, catalog_rows) of equal length. An unknown ID
+    must never become row -1, which would update the last product by mistake.
+    """
     item_ids=np.asarray(item_ids,dtype=np.int64)
     mapped=np.full(len(item_ids),-1,dtype=np.int32)
     valid=(item_ids>=0)&(item_ids<len(id_to_row))
@@ -49,6 +60,11 @@ def known_item_rows(item_ids,id_to_row):
 
 
 def window_counts(cumulative, end, days=None):
+    """Read event totals through end from a cumulative day-by-product array.
+
+    days=None uses all available history; otherwise subtract the cumulative
+    total before the requested window. Returns one count per product.
+    """
     if end < 0:
         return np.zeros(cumulative.shape[1], dtype=np.float32)
     current = cumulative[min(end, len(cumulative)-1)]
@@ -58,7 +74,9 @@ def window_counts(cumulative, end, days=None):
 
 
 class TemporalStats:
+    """Cached historical popularity/CTR features indexed by cutoff day."""
     def __init__(self, path=ROOT/'daily_counts.npz'):
+        """Load saved daily counts and accumulate click/impression/view/purchase totals."""
         with np.load(path) as archive:
             self.counts = {name: np.cumsum(archive[name], axis=0, dtype=np.float32)
                            for name in ['click', 'impression', 'view', 'purchase']}
@@ -66,6 +84,12 @@ class TemporalStats:
         self.current = None
 
     def snapshot(self, end):
+        """Return one feature row per product using events no later than end.
+
+        Columns follow STAT_NAMES: log counts over several windows, smoothed
+        click-through rates, and a click trend. Reuse the last snapshot when
+        consecutive queries have the same historical cutoff.
+        """
         if self.current_end == end:
             return self.current
         c = [window_counts(self.counts['click'], end, w) for w in [None, 7, 30]]
@@ -82,7 +106,12 @@ class TemporalStats:
 
 
 def reserve_confirmation():
-    """Deterministic outcome-blind reservation reproducible from a clean checkout."""
+    """Reserve the earlier experiment's confirmation IDs without measuring scores.
+
+    Excludes original test sessions, samples with a fixed seed, and checks
+    the resulting ID fingerprint against the protocol. Save the reservation
+    if absent and return the chosen query metadata.
+    """
     ROOT.mkdir(parents=True,exist_ok=True)
     meta=pd.read_parquet('data/processed/queries_metadata.parquet')
     previous=pd.read_parquet('data/processed/test.parquet')
@@ -100,6 +129,14 @@ def reserve_confirmation():
 
 
 def prepare():
+    """Build the expanded training sample, temporal counts, and neural data.
+
+    Reuse original validation IDs and reserve the earlier confirmation sample.
+    Scan raw queries in chunks to collect candidate impressions, then count
+    clicks, views, and purchases by day/product. Save data/processed_v2 and
+    the ordered daily-session interaction file required by RecBole.
+    Returns nothing; a preparation summary is saved under results/optimization.
+    """
     ROOT.mkdir(parents=True, exist_ok=True)
     if (ROOT/'daily_counts.npz').exists():
         raise RuntimeError('Prepared v2 data already exists; reuse it rather than overwrite the sample')
@@ -167,10 +204,23 @@ def prepare():
 
 
 def rank_fraction(values):
+    """Convert values to stable ascending rank fractions from 0 to 1.
+
+    Larger inputs get larger fractions; equal values follow input order.
+    """
     return np.argsort(np.argsort(values,kind='stable'),kind='stable')/max(1,len(values)-1)
 
 
 def build_features(split,root=None,protocol_path='config/optimization_protocol.json',freeze_path='results/optimization/frozen_selection.json'):
+    """Save per-candidate features, click labels, and query histories for split.
+
+    Read the selected query rows from root (default: data/processed_v2).
+    Combine the original 12 features with historical statistics and query/
+    session features, using only information available before each query.
+    Flatten candidates across queries; offsets marks each query's row range.
+    Save arrays, chronological neural prefixes, metadata, and a manifest.
+    Confirmation features require the specified frozen-choice file first.
+    """
     root=ROOT if root is None else Path(root)
     if split=='confirmation' and not Path(freeze_path).exists():
         raise RuntimeError('Confirmation outcomes remain locked until model selection is frozen')
@@ -199,6 +249,8 @@ def build_features(split,root=None,protocol_path='config/optimization_protocol.j
         if (row.sessionId,row.eventdate) in keys and row.itemId in catalog.row:
             events[row.sessionId,row.eventdate].append((row.timeframe,row.queryId,row.itemId))
     for values in events.values(): values.sort()
+    # Candidate rows are flattened across searches to save efficiently.
+    # offsets[j]:offsets[j+1] later recovers just query j's candidate rows.
     capacity=int(queries['items'].str.count(',').add(1).sum())
     X=np.lib.format.open_memmap(target/'features.npy',mode='w+',dtype=np.float32,shape=(capacity,len(FEATURE_NAMES)))
     y=np.lib.format.open_memmap(target/'labels.npy',mode='w+',dtype=np.int8,shape=(capacity,))
@@ -215,6 +267,8 @@ def build_features(split,root=None,protocol_path='config/optimization_protocol.j
         if not relevance.any():
             excluded['no_observed_positive_in_candidates']+=1
             continue
+        # Target clicks form y (the answer); only strictly earlier clicks
+        # may enter history and the model inputs.
         history=prior_click_items(events[row['sessionId'],row['eventdate']],row['queryId'],row['timeframe'])
         base=catalog.features(items,history,tokens(row['searchstring.tokens']),row['categoryId'])
         rows=np.array([catalog.row[x] for x in items])
@@ -245,6 +299,8 @@ def build_features(split,root=None,protocol_path='config/optimization_protocol.j
         metadata.append(dict(query_id=row['queryId'],session_id=row['sessionId'],date=row['eventdate'],
             history_count=len(history),history_diversity=diversity,
             category_count=row['candidate_category_count'] if 'candidate_category_count' in row else len({catalog.category[x] for x in items})))
+        # History features use newest-first order, but sequence models need
+        # the chronological oldest-first prefix. Zero is the padding value.
         prefix=np.zeros(10,dtype=np.int32)
         prefix[:len(history)]=list(reversed(history))
         prefixes.append(prefix)
@@ -260,6 +316,13 @@ def build_features(split,root=None,protocol_path='config/optimization_protocol.j
 
 
 def load_features(split,variant='base',root=None):
+    """Return the saved arrays/metadata for one split and feature variant.
+
+    X is the candidate feature matrix; y contains binary click labels;
+    items contains product IDs; offsets marks query boundaries; prefixes
+    stores earlier clicks oldest first, padded with zeros; meta describes
+    each query. Memory-mapped candidate arrays are trimmed to used rows.
+    """
     target=(ROOT if root is None else Path(root))/split
     manifest=json.loads((target/'manifest.json').read_text())
     n=manifest['candidates']
@@ -273,6 +336,7 @@ def load_features(split,variant='base',root=None):
 
 
 def main():
+    """Run the older data preparation or feature-building command from the terminal."""
     parser=argparse.ArgumentParser()
     parser.add_argument('action',choices=['prepare','features'])
     parser.add_argument('--split',choices=['train','validation','confirmation'],default='train')

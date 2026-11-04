@@ -6,11 +6,18 @@ import sys
 
 
 def run(*arguments):
+    """Run a Python module/script with this interpreter and stop if it fails."""
     print('Running:',sys.executable,*arguments,flush=True)
     subprocess.run([sys.executable,*arguments],check=True)
 
 
 def prepare():
+    """Prepare data and the reference for the older optimization workflow.
+
+    Reuse existing files; otherwise download/audit raw data, train the original
+    reference, and build temporal/view features. The current main.py separates
+    preparation from training into its first two stages.
+    """
     if not Path('data/raw/train-queries.csv').exists():run('scripts/download_data.py')
     if not Path('data/processed/queries_metadata.parquet').exists():
         run('-m','session_rerank.prepare')
@@ -26,6 +33,11 @@ def prepare():
 
 
 def train():
+    """Run the older seven-tree feature/sample comparisons and BPR GRU4Rec.
+
+    Outputs are under results/optimization; current main.py trains only the
+    earlier models needed for comparison, plus the newer contextual/CE models.
+    """
     experiments=[
         ('baseline_20k',['--queries','20000','--features','baseline']),
         ('enhanced_20k',['--queries','20000']),('enhanced_60k',[]),
@@ -41,6 +53,11 @@ def train():
 
 
 def confirm():
+    """Unlock feature building and evaluation for the older frozen confirmation.
+
+    Refuses to proceed before choices are frozen or after outcomes already
+    exist. The current main.py uses pipeline/evaluation.py instead.
+    """
     if not Path('results/optimization/frozen_selection.json').exists():
         raise RuntimeError('Run the freeze stage before opening confirmation outcomes')
     if Path('results/optimization/confirmation_per_query.npz').exists():
@@ -53,6 +70,11 @@ def confirm():
 
 
 def main():
+    """Dispatch the older prepare/train/freeze/confirm/all workflow.
+
+    Kept for reproducing earlier experiments; start with root main.py when
+    learning or running the current six-stage experiment.
+    """
     parser=argparse.ArgumentParser()
     parser.add_argument('stage',choices=['prepare','train','freeze','confirm','all'])
     stage=parser.parse_args().stage

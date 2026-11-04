@@ -42,6 +42,34 @@ selection rules, diversification search, and statistical calculations. The
 results documented below are the original reported experiment, not a new full
 training run of this branch.
 
+## Follow the code in VS Code
+
+Open the `cp4285-g02` repository folder itself in VS Code. Start with `main.py`,
+then Ctrl+click a stage function (or press F12) to open its implementation. Each
+stage is imported directly from the file that defines it. Every application
+function has a docstring explaining its purpose; larger functions also describe
+their inputs, returned values, and saved files. Hover over a call to read it.
+
+The `[tool.pyright]` setting in `pyproject.toml` adds `src` to the editor's import
+search path, following the [Pyright configuration documentation](https://github.com/microsoft/pyright/blob/main/docs/configuration.md).
+If navigation still does not work, use **Python: Select Interpreter** in the
+command palette and choose the project's `.venv\Scripts\python.exe`, then run
+**Developer: Reload Window**. Microsoft Python and Pylance are required.
+
+When reading the code, these names recur:
+
+- **Query:** one search with its own candidate products.
+- **History/prefix:** items clicked before that query, with no target/future clicks.
+- **Features (`X`):** numeric information used to score each candidate.
+- **Labels (`y`):** whether the candidate received an observed click for that query.
+- **Offsets:** boundaries separating each query's rows in the flattened arrays.
+- **Validation:** data for model development and diversification tuning.
+- **Selection:** a separate sample used to choose among nominated models.
+- **Confirmation:** reserved queries evaluated after all choices are frozen.
+- **NDCG@10:** relevance quality near the top of the recommendation list.
+- **ILD@10:** average token dissimilarity among the top ten items.
+- **Frozen choices:** recorded models/policies that cannot change after evaluation.
+
 ## Run on Windows with uv
 
 Open PowerShell in `C:\Nam-projects\Cp4285-Diginetica\cp4285-g02`:

@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+# JSON stores human-readable choices; CSV stores score tables; NPZ stores
+# numerical arrays. All paths below are relative to the repository root.
 RESULTS = Path("results/iteration3")
 FROZEN_CHOICES = RESULTS / "frozen_selection.json"
 CANDIDATES = RESULTS / "candidate_manifest.json"
@@ -15,10 +17,16 @@ PROTOCOL = Path("config/iteration3_protocol.json")
 
 
 def read_json(path):
+    """Read a JSON file into Python dictionaries/lists and return that value."""
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
 def write_json(path, value):
+    """Save a Python value as readable JSON, replacing the file only when ready.
+
+    Write to a temporary file first so an interrupted write does not leave
+    a partially written frozen-choice or experiment record.
+    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
@@ -27,7 +35,11 @@ def write_json(path, value):
 
 
 def verify_models(hashes):
-    """Reject missing or changed models/configuration before using saved choices."""
+    """Check that each recorded model/configuration file is still unchanged.
+
+    hashes maps file paths to SHA-256 fingerprints of their original bytes.
+    Raise an error if a file is missing or changed; return nothing on success.
+    """
     for name, expected in hashes.items():
         path = Path(name)
         if not path.is_file():
@@ -40,6 +52,11 @@ def verify_models(hashes):
 
 @dataclass
 class ModelComparison:
+    """The result passed from model comparison into policy choice/evaluation.
+
+    Stores the winner, all nominees, their measured scores, and the file
+    fingerprints needed to freeze exactly the models that were compared.
+    """
     selected_name: str
     nominees: dict
     validation_scores: list
@@ -50,10 +67,15 @@ class ModelComparison:
 
     @property
     def selected(self):
+        """Return the winner's score descriptor, using its selected_name key."""
         return self.nominees[self.selected_name]
 
     def frozen_payload(self, policies):
-        # Preserve the original frozen-selection format for existing runs.
+        """Combine this comparison with policies into the saved-choice dictionary.
+
+        Keeps the earlier experiment's JSON field names so existing runs
+        remain compatible. Returns data only; it does not write a file.
+        """
         return dict(
             selected_name=self.selected_name,
             selected=self.selected,
@@ -68,6 +90,7 @@ class ModelComparison:
 
     @classmethod
     def from_frozen(cls, payload):
+        """Rebuild a ModelComparison from an existing frozen-selection dictionary."""
         return cls(
             selected_name=payload["selected_name"],
             nominees=payload["nominees"],
@@ -81,6 +104,12 @@ class ModelComparison:
 
 @dataclass
 class EvaluationResults:
+    """Measured outcomes passed to the reporting stage.
+
+    metrics maps method names to per-query metric arrays; diversity_sweep
+    contains results for all tested weights. dataset supplies query metadata,
+    examples contains recommendation lists, and receipt identifies this run.
+    """
     metrics: dict
     diversity_sweep: Any
     dataset: dict

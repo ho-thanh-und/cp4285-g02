@@ -13,6 +13,14 @@ OUT=Path('results/optimization')
 
 
 def train(name,columns,leaves=31,query_cap=None,variant='base'):
+    """Fit one temporal/view-feature LambdaMART tree ranker.
+
+    name labels saved files; columns selects the first feature columns;
+    leaves controls tree complexity; query_cap optionally limits training
+    queries; variant chooses base or view-augmented features. Stop training
+    when validation ranking stops improving. Save the model, predictions,
+    feature importance, and summary under results/optimization; return nothing.
+    """
     if (OUT/'frozen_selection.json').exists():raise RuntimeError('Model selection already frozen')
     if (OUT/f'{name}.txt').exists():raise RuntimeError('Model already recorded')
     training=load_features('train',variant)
@@ -53,6 +61,7 @@ def train(name,columns,leaves=31,query_cap=None,variant='base'):
 
 
 def main():
+    """Translate command-line feature/sample options into one tree training run."""
     parser=argparse.ArgumentParser()
     parser.add_argument('--name',required=True)
     parser.add_argument('--features',choices=['baseline','enhanced','views'],default='enhanced')

@@ -21,10 +21,23 @@ EXTRA=['collab_last','collab_max','collab_mean','collab_recency_weighted','colla
 NAMES=FEATURE_NAMES+VIEW_NAMES+EXTRA
 
 
-def hash_ids(values):return hashlib.sha256(','.join(map(str,sorted(values))).encode()).hexdigest()
+def hash_ids(values):
+    """Return a reproducible SHA-256 fingerprint of sorted query IDs.
+
+    Comparing this value checks that a reserved sample has the expected IDs,
+    regardless of the order in which they were loaded.
+    """
+    return hashlib.sha256(','.join(map(str,sorted(values))).encode()).hexdigest()
 
 
 def reserve_and_prepare():
+    """Reserve the fresh model-selection and final confirmation query samples.
+
+    Select 8,000 development queries excluding original validation sessions,
+    and reserve 10,000 later queries excluding earlier test/confirmation
+    sessions. Fixed seeds and ID hashes make both samples reproducible.
+    Save reserved raw query rows under data/iteration3; no metrics are computed.
+    """
     ROOT.mkdir(parents=True,exist_ok=True);OUT.mkdir(parents=True,exist_ok=True)
     meta=pd.read_parquet('data/processed/queries_metadata.parquet')
     earlier=pd.read_parquet('data/processed/validation.parquet')
@@ -61,6 +74,13 @@ def reserve_and_prepare():
 
 
 def load_data(split,variant='base'):
+    """Load one split's candidate arrays and optional collaborative features.
+
+    train/validation read earlier processed data; selection/confirmation read
+    data/iteration3. variant='collab' or 'no_user' loads the contextual matrix;
+    the anonymous model's column filtering is handled separately.
+    Returns the same data dictionary shape as load_features().
+    """
     if split in ['train','validation']:
         data=load_features(split,'views')
     else:data=load_features(split,'views',root=ROOT)
@@ -71,6 +91,12 @@ def load_data(split,variant='base'):
 
 
 def build_split(split):
+    """Ensure one split has base, view, and collaborative feature caches.
+
+    Selection/confirmation need their own base/view arrays first. Training/
+    validation reuse the earlier arrays. Confirmation stays locked until
+    frozen_selection.json exists. Returns nothing; files are cached on disk.
+    """
     if split=='confirmation' and not (OUT/'frozen_selection.json').exists():raise RuntimeError('Freeze before confirmation access')
     if split in ['selection','confirmation']:
         if not (ROOT/split/'manifest.json').exists():
@@ -81,6 +107,11 @@ def build_split(split):
 
 
 def context_cutoff(split,day):
+    """Choose the last date whose clicks may build a query's context graph.
+
+    Validation/selection share a fixed cutoff; confirmation has a later fixed
+    cutoff. Training uses weekly snapshots strictly before the query date.
+    """
     if split in ['validation','selection']:return '2016-04-29'
     if split=='confirmation':return '2016-05-14'
     if day<='2016-04-07':return '2016-03-30'
@@ -90,6 +121,12 @@ def context_cutoff(split,day):
 
 
 def profile_map(frame,key):
+    """Return up to 20 recent distinct clicked products for each nonmissing key.
+
+    frame must already be chronological and limited to allowed past data.
+    key is userId or sessionId. Missing identities are excluded rather than
+    treating all anonymous visitors as a single person.
+    """
     result={}
     for ident,group in frame.dropna(subset=[key]).groupby(key,sort=False):
         result[str(int(ident))]=list(dict.fromkeys(reversed(group.itemId.tolist())))[:20]
@@ -97,6 +134,13 @@ def profile_map(frame,key):
 
 
 def build_snapshot(cutoff,catalog):
+    """Load or build an item co-click graph and past identity profiles.
+
+    Use only catalog clicks on/before cutoff. Products clicked in the same
+    daily session are connected; normalize the connection counts to reduce
+    raw popularity effects. Return the sparse item graph and profile data,
+    also caching both under data/iteration3/graphs.
+    """
     folder=ROOT/'graphs';folder.mkdir(exist_ok=True)
     graph_path=folder/f'{cutoff}.npz';profiles_path=folder/f'{cutoff}_profiles.json'
     if graph_path.exists() and profiles_path.exists():
@@ -112,6 +156,8 @@ def build_snapshot(cutoff,catalog):
     row=np.array([catalog.row[int(item)] for item in distinct.itemId],dtype=np.int32)
     incidence=sparse.csr_matrix((np.ones(len(row),dtype=np.float32),(group,row)),shape=(int(group.max())+1,len(catalog.ids)))
     frequency=np.asarray(incidence.sum(axis=0)).ravel()
+    # incidence[session, item] records products clicked in that daily session.
+    # incidence.T @ incidence counts how often product pairs share a session.
     graph=(incidence.T@incidence).tocsr()
     graph.setdiag(0);graph.eliminate_zeros()
     left=np.repeat(frequency,np.diff(graph.indptr))
@@ -126,11 +172,23 @@ def build_snapshot(cutoff,catalog):
 
 
 def collaborative_scores(graph,items,history,catalog):
+    """Return each candidate's graph connection to each supplied history item.
+
+    Rows correspond to items; columns correspond to history. catalog maps
+    product IDs to graph rows. With no history, return one all-zero column.
+    """
     if not history:return np.zeros((len(items),1),dtype=np.float32)
     return graph[[catalog.row[x] for x in history]][:,[catalog.row[x] for x in items]].toarray().T
 
 
 def build_context(split):
+    """Append 15 past-context features to the 48 existing candidate features.
+
+    Choose a safe historical graph for each query. Summarize candidate
+    connections to session clicks, known-user history, and older session
+    context. Save a 63-column matrix plus a coverage audit; reuse it if present.
+    Older profiles come only from the selected historical cutoff.
+    """
     path=ROOT/f'{split}_collab.npy'
     if path.exists():return
     data=load_data(split)
@@ -173,10 +231,19 @@ def build_context(split):
 
 
 def train_tree(name,leaves=31,no_user=False):
+    """Fit one contextual LambdaMART model and save its validation evidence.
+
+    name identifies the output files; leaves controls tree complexity.
+    no_user=True excludes columns 53..59 containing persistent-user features
+    for an anonymous-user control. Early stopping uses original validation.
+    Saves weights, scores, feature importance, and selected-column metadata.
+    """
     if (OUT/'frozen_selection.json').exists() or (OUT/'selection_summary.csv').exists():raise RuntimeError('Selection frozen')
     if (OUT/f'{name}.txt').exists():raise RuntimeError('Model already recorded')
     train=load_data('train','collab');valid=load_data('validation','collab')
     columns=list(range(len(NAMES)))
+    # Drop known-user/profile features for the anonymous-user control, while
+    # retaining current-session and older-session context.
     if no_user:columns=[i for i in columns if not 53<=i<=59]
     model=lgb.LGBMRanker(objective='lambdarank',n_estimators=700,learning_rate=.04,num_leaves=leaves,
         min_child_samples=150,reg_lambda=5,n_jobs=4,random_state=4285,deterministic=True,
@@ -199,6 +266,11 @@ def train_tree(name,leaves=31,no_user=False):
 
 
 def main():
+    """Handle the older prepare/context/train/run commands.
+
+    prepare reserves iteration-3 queries; context builds a split; train fits
+    one contextual tree; run delegates to the six-stage root main.py.
+    """
     parser=argparse.ArgumentParser()
     parser.add_argument('action',choices=['prepare','context','train','run'])
     parser.add_argument('--split',default='train',choices=['train','validation','selection','confirmation'])
@@ -212,7 +284,7 @@ def main():
 
 
 def run_all():
-    """Compatibility entry point for the readable main.py pipeline."""
+    """Keep the existing full-run command working by calling root main.main()."""
     from main import main as run_pipeline
     run_pipeline()
 

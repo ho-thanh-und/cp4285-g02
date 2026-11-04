@@ -18,6 +18,12 @@ VARIANTS={'gru_ce':('GRU4Rec','config/recbole_gru_ce.yaml'),
 
 
 def configuration(variant,device='auto'):
+    """Build a RecBole configuration for gru_ce or sas_ce and choose a device.
+
+    Merge the common sequence settings with the selected model's YAML file.
+    device='auto' uses CUDA, then Apple MPS, then CPU when available.
+    Returns the configuration passed to dataset/model/trainer creation.
+    """
     model,path=VARIANTS[variant]
     config=Config(model=model,dataset='diginetica_session',
                   config_file_list=['config/recbole_gru4rec.yaml',path])
@@ -29,6 +35,14 @@ def configuration(variant,device='auto'):
 
 
 def train(variant,device='auto',smoke=False):
+    """Train one GRU4Rec or SASRec model with cross-entropy (CE) loss.
+
+    variant selects the model/configuration; device chooses the hardware.
+    Validate on complete query candidate lists and save the best checkpoint,
+    ID mapping, scores, and summary under results/iteration3. smoke=True
+    instead runs five minibatches and reports loss without saving a model.
+    CE learns the clicked target over the item vocabulary.
+    """
     OUT.mkdir(parents=True,exist_ok=True)
     if (OUT/'frozen_selection.json').exists() or (OUT/'selection_summary.csv').exists():raise RuntimeError('Iteration 3 model selection is frozen')
     path=OUT/f'{variant}.pth'
@@ -71,6 +85,13 @@ def train(variant,device='auto',smoke=False):
 
 
 def score(variant,split):
+    """Restore one neural variant and save scores for the requested split.
+
+    variant='bpr' uses the earlier GRU4Rec; gru_ce/sas_ce use the newer
+    checkpoints. Load candidate histories and score all supplied products.
+    Confirmation is blocked until choices are frozen. Returns nothing;
+    the score array is saved under results/iteration3.
+    """
     if split=='confirmation' and not (OUT/'frozen_selection.json').exists():raise RuntimeError('Freeze before confirmation')
     from .iteration3 import load_data
     if variant=='bpr':
@@ -82,13 +103,17 @@ def score(variant,split):
     config=configuration(variant,'cpu')
     torch.set_num_threads(4)
     class Shape:
-        def num(self,field):return checkpoint['n_items']
+        """Minimal dataset interface for reconstructing a CE model from its checkpoint."""
+        def num(self,field):
+            """Return the item-vocabulary size recorded in the saved checkpoint."""
+            return checkpoint['n_items']
     model=get_model(checkpoint['model_name'])(config,Shape())
     model.load_state_dict(checkpoint['state_dict'])
     np.save(OUT/f'{variant}_{split}.npy',candidate_scores(model,checkpoint['mapping'],load_data(split)))
 
 
 def main():
+    """Dispatch the neural train, five-batch smoke, or saved-model scoring command."""
     parser=argparse.ArgumentParser()
     parser.add_argument('action',choices=['train','score','smoke'])
     parser.add_argument('--variant',choices=list(VARIANTS)+['bpr'],required=True)

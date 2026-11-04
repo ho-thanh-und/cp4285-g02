@@ -11,11 +11,19 @@ import matplotlib.pyplot as plt
 
 
 def file_hash(path):
+    """Return the SHA-256 fingerprint of a file's bytes for freeze checks."""
     with open(path,'rb') as stream:
         return hashlib.file_digest(stream,'sha256').hexdigest()
 
 
 def policy_indices(policy, meta, weights):
+    """Translate a policy into one weight-grid position per query.
+
+    meta supplies history_count and history_diversity; weights is the tested
+    relevance-weight grid. A fixed policy uses one weight for everyone;
+    gates/thresholds/progression adapt it from the available history.
+    Snap each requested weight to the closest tested weight; return indices.
+    """
     count=meta.history_count.to_numpy()
     diversity=meta.history_diversity.to_numpy()
     kind=policy['kind']
@@ -36,11 +44,25 @@ def policy_indices(policy, meta, weights):
 
 
 def apply_policy(policy,meta,weights,metrics):
+    """Return each query's cached metric row at the weight chosen by a policy.
+
+    metrics has shape (queries, weights, metrics). This selects measured
+    outcomes without running recommendation or re-ranking again.
+    """
     indices=policy_indices(policy,meta,weights)
     return metrics[np.arange(len(meta)),indices]
 
 
 def choose(candidates,meta,weights,metrics,budget=.02):
+    """Return the highest-variety policy that respects a validation relevance budget.
+
+    candidates are policy dictionaries; metrics is a measured weight sweep.
+    Require mean NDCG >= relevance-only mean NDCG * (1-budget). Maximize
+    token Jaccard ILD, breaking ties by NDCG. Default budget=.02 allows a
+    2% relative mean loss on validation; this is not a statistical guarantee.
+    """
+    # Weight-grid position 0 is relevance-only; metric position 0 is NDCG.
+    # Example: baseline .25 with budget .02 requires mean NDCG >= .245.
     floor=metrics[:,0,0].mean()*(1-budget)
     best=None
     score=(-np.inf,-np.inf)
@@ -58,6 +80,12 @@ def choose(candidates,meta,weights,metrics,budget=.02):
 
 
 def freeze():
+    """Choose and save policies for the original reference-only experiment.
+
+    Read its validation metric cache, search the policy families, and record
+    the model/protocol hashes in results/frozen_policies.json. This is the
+    older policy workflow; main.py uses the newer pipeline stage instead.
+    """
     if Path('results/frozen_policies.json').exists():
         raise RuntimeError('Policies already frozen. Do not change selection after inspecting test results.')
     cache=np.load('results/cache/validation.npz')
@@ -89,6 +117,13 @@ def freeze():
 
 
 def cluster_bootstrap(values,clusters,repetitions=1000):
+    """Return repeated metric means after resampling entire sessions.
+
+    values contains per-query measurements; clusters identifies each query's
+    session. Draw sessions with replacement using a fixed seed, keeping all
+    their queries together and retaining query-weighted means. These draws
+    support confidence intervals and paired model comparisons.
+    """
     _,inverse=np.unique(clusters,return_inverse=True)
     n_clusters=inverse.max()+1
     counts=np.bincount(inverse,minlength=n_clusters)
@@ -103,6 +138,12 @@ def cluster_bootstrap(values,clusters,repetitions=1000):
 
 
 def report(name):
+    """Write tables and figures for the original reference-only experiment.
+
+    name selects validation or test caches. Apply frozen policies and a
+    shuffled-history control, bootstrap by session, and save averages,
+    paired differences, subgroup results, and history coverage under results/.
+    """
     cache=np.load(f'results/cache/{name}.npz')
     meta=pd.read_parquet(f'results/cache/{name}_metadata.parquet')
     metrics,weights=cache['metrics'],cache['weights']
@@ -168,6 +209,11 @@ def report(name):
 
 
 def plot(name,meta,weights,metrics,values):
+    """Save the original experiment's trade-off and history-group charts.
+
+    meta provides query groups; weights/metrics describe the measured sweep;
+    values contains the already applied policies. No choices are retuned.
+    """
     Path('results/figures').mkdir(parents=True,exist_ok=True)
     plt.rcParams.update({'font.size':11,'axes.spines.top':False,'axes.spines.right':False})
     fig,ax=plt.subplots(figsize=(9,6))
@@ -215,6 +261,7 @@ def plot(name,meta,weights,metrics,values):
 
 
 def main():
+    """Dispatch the original policy freeze/report command and its split option."""
     parser=argparse.ArgumentParser()
     parser.add_argument('action',choices=['freeze','report'])
     parser.add_argument('--split',choices=['validation','test'],default='validation')

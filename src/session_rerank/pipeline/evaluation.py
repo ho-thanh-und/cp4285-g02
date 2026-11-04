@@ -7,7 +7,13 @@ from .state import (
 
 
 def freeze_choices(comparison: ModelComparison, policies):
-    """Preserve the existing frozen format and refuse to replace saved choices."""
+    """Save a permanent record of the selected models and diversity policies.
+
+    comparison and policies come from steps 3 and 4. Check the model-file
+    hashes, then save frozen_selection.json before confirmation is opened.
+    Existing choices must match exactly; they cannot be silently replaced.
+    Returns the saved choices as a dictionary.
+    """
     expected = comparison.frozen_payload(policies)
     verify_models(expected["hashes"])
     if FROZEN_CHOICES.exists():
@@ -22,7 +28,12 @@ def freeze_choices(comparison: ModelComparison, policies):
 
 
 def _read_cached_results():
-    """Reuse numerical outcomes; never rerun confirmation to repair a report."""
+    """Reconstruct EvaluationResults from an existing confirmation cache.
+
+    Loads saved metric arrays, examples, and the evaluation receipt, plus
+    confirmation data needed for subgroup reports. Older caches load their
+    examples/receipt from adjacent JSON files. No model is scored again.
+    """
     import json
     import numpy as np
     from ..iteration3 import load_data
@@ -40,6 +51,15 @@ def _read_cached_results():
 
 
 def freeze_and_evaluate(comparison: ModelComparison, policies):
+    """Lock all choices, then measure the reserved confirmation queries once.
+
+    comparison specifies the model candidates; policies specify how to select
+    diversification weights. Verify reserved IDs and exclude previously used
+    test sessions before scoring. Calculate relevance and token variety for
+    the same candidate lists, then apply the already chosen policies.
+    Returns EvaluationResults for step 6. A saved numerical cache is reused
+    on later runs so report generation does not repeat the experiment.
+    """
     import json
     import numpy as np
     import pandas as pd
@@ -52,6 +72,8 @@ def freeze_and_evaluate(comparison: ModelComparison, policies):
     if EVALUATION_CACHE.exists():
         return _read_cached_results()
 
+    # Confirm both the exact reserved query IDs and separation from the
+    # earlier test/confirmation sessions before computing any new scores.
     reserved = pd.read_parquet(scoring.ROOT / "confirmation_ids.parquet")
     protocol = read_json(PROTOCOL)
     assert scoring.hash_ids(reserved.queryId) == protocol["confirmation_query_ids_sha256"]
@@ -59,6 +81,7 @@ def freeze_and_evaluate(comparison: ModelComparison, policies):
             | set(pd.read_parquet("data/processed_v2/confirmation_ids.parquet").sessionId))
     assert not set(reserved.sessionId) & used
 
+    # Frozen choices now exist, so confirmation features may be constructed.
     scoring.build_split("confirmation")
     data = scoring.load_data("confirmation")
     cache = {}
@@ -68,6 +91,8 @@ def freeze_and_evaluate(comparison: ModelComparison, policies):
     scores["original_ranker"] = original.predict(data["X"][:, :12], num_threads=4)
     scores["selected_relevance"] = scores[frozen["selected_name"]]
     metrics, sweep, examples = evaluate(data, scores, scores["selected_relevance"])
+    # Apply the policies chosen on validation; do not search for new ones
+    # using these confirmation outcomes.
     for name, policy in frozen["policies"].items():
         metrics[name] = apply_policy(policy, data["meta"], WEIGHTS, sweep)
 

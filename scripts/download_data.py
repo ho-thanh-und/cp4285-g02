@@ -14,6 +14,12 @@ FILES = {
 
 
 def download(name, file_id, resource_key):
+    """Download one public source file, validate its format, and return its path.
+
+    Reuse a valid existing copy. Handle Google's confirmation form, stream
+    into a temporary file, and only replace the final file after checking
+    that it is the expected ZIP or baseline Python source. Never execute it.
+    """
     target = Path("data/source") / name
     target.parent.mkdir(parents=True, exist_ok=True)
     if target.exists() and (zipfile.is_zipfile(target) if name.endswith('.zip') else target.read_bytes().startswith(b'#')):
@@ -42,6 +48,12 @@ def download(name, file_id, resource_key):
 
 
 def main():
+    """Download original public files, safely unpack the CSVs, and save hashes.
+
+    Extract only archive paths inside data/raw and record source sizes/SHA-256
+    fingerprints under data/source. The baseline script is retained as source
+    material; it is not imported or run.
+    """
     manifest = {"folder_url": FOLDER, "files": []}
     for name, (file_id, key) in FILES.items():
         target = download(name, file_id, key)
