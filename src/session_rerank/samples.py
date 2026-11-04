@@ -26,6 +26,7 @@ def read_protocol(path):
     expected = ["train", "validation", "selection", "confirmation"]
     if list(protocol["splits"]) != expected:
         raise ValueError(f"Define splits in chronological order: {expected}")
+    # The end date belongs outside the split. The next split can start on that date.
     for name, split in protocol["splits"].items():
         start, end = split["start"], split["end_exclusive"]
         if start >= end or (previous_end is not None and start < previous_end):
@@ -55,6 +56,7 @@ def select_sessions(raw, protocol):
     ])
     if not meta.queryId.is_unique or meta.isna().any().any():
         raise ValueError("Query IDs must be unique and sampling metadata complete")
+    # A session is one source session ID on one date. This keeps its queries together.
     groups = meta.groupby(["sessionId", "eventdate"], sort=True).agg(
         query_count=("queryId", "size"), has_hidden=("is.test", "any"),
         first_query_timeframe_ms=("timeframe", "min"),
@@ -70,6 +72,8 @@ def select_sessions(raw, protocol):
         if pool.empty:
             raise ValueError(f"No eligible anonymous daily sessions for {name}")
         shuffled = pool.iloc[np.random.default_rng(protocol["seed"] + index).permutation(len(pool))]
+        # Find the first point where the running query count reaches the target.
+        # Keep that entire session even if it puts the sample over the target.
         count = min(len(shuffled), int(np.searchsorted(
             shuffled.query_count.cumsum(), spec["target_queries"], side="left"
         )) + 1)
@@ -77,6 +81,7 @@ def select_sessions(raw, protocol):
         selected["split"] = name
         chosen.append(selected)
     selected = pd.concat(chosen, ignore_index=True)
+    # Give each daily session a key for joining tables without exporting the source ID.
     selected["session_key"] = [
         "s_" + hashlib.sha256(f"{day}|{sid}".encode()).hexdigest()[:16]
         for sid, day in zip(selected.sessionId, selected.eventdate)
@@ -103,6 +108,7 @@ def load_visible_queries(raw, selected_meta):
     frames = []
     fields = ["queryId", "sessionId", "eventdate", "timeframe",
               "searchstring.tokens", "categoryId", "items"]
+    # Read in batches because the candidate lists make this CSV large.
     for chunk in pd.read_csv(raw / "train-queries.csv", sep=";", usecols=fields,
                              dtype={"items": "string", "searchstring.tokens": "string"},
                              chunksize=25000):
@@ -126,6 +132,7 @@ def build_candidates_and_clicks(raw, source_queries):
     import pandas as pd
 
     candidates = source_queries[["queryId", "split", "items"]].copy()
+    # Expand a list like "42,17,93" into three rows with ranks 1, 2, and 3.
     candidates["itemId"] = candidates["items"].map(
         lambda value: [int(item) for item in str(value).split(",") if item]
     )
@@ -144,6 +151,7 @@ def build_candidates_and_clicks(raw, source_queries):
     if (clicks.click_timeframe_ms <= clicks.query_timeframe_ms).any():
         raise ValueError("A target click is not strictly after its source query")
 
+    # A click has a known rank only when its item occurs once in that query's list.
     positions = candidates.groupby(["queryId", "itemId"]).original_rank.agg(
         candidate_occurrences="size", original_rank="first",
     ).reset_index()
@@ -157,6 +165,7 @@ def build_candidates_and_clicks(raw, source_queries):
     # Equal click timestamps share an order number. We do not invent their order.
     clicks["click_time_order"] = clicks.groupby("queryId").click_timeframe_ms.rank(method="dense").astype("int64")
     clicks["click_delay_ms"] = clicks.click_timeframe_ms - clicks.query_timeframe_ms
+    # Join click counts back to the shown items. Zero means no click was recorded.
     counts = clicks.groupby(["queryId", "itemId"]).size().rename("click_count").reset_index()
     candidates = candidates.merge(counts, on=["queryId", "itemId"], how="left", validate="many_to_one")
     candidates["click_count"] = candidates.click_count.fillna(0).astype("int64")
@@ -179,6 +188,7 @@ def build_events(raw, source_queries, clicks, selected_sessions):
     """
     import pandas as pd
 
+    # Use the session ID and date to attach views and purchases to the right visit.
     mapping = selected_sessions.loc[selected_sessions.split != "confirmation",
                                     ["sessionId", "eventdate", "session_key", "split"]]
     frames = []
@@ -194,6 +204,7 @@ def build_events(raw, source_queries, clicks, selected_sessions):
         fields = ["sessionId", "eventdate", "itemId", "timeframe"]
         if event_type == "purchase":
             fields.append("ordernumber")
+        # Read order numbers as text so long identifiers keep every digit.
         frame = pd.read_csv(raw / filename, sep=";", usecols=fields,
                             dtype={"ordernumber": "string"} if event_type == "purchase" else None).merge(
             mapping, on=["sessionId", "eventdate"], validate="many_to_one",
@@ -209,6 +220,7 @@ def build_events(raw, source_queries, clicks, selected_sessions):
         events["order_number"] = events.order_number.astype("string")
     events = events.sort_values(["session_key", "timeframe_ms", "event_type"], kind="stable").reset_index(drop=True)
     events["event_id"] = [f"e_{i:08d}" for i in range(len(events))]
+    # Events recorded at the same millisecond share a time group.
     events["time_group"] = events.groupby("session_key").timeframe_ms.rank(method="dense").astype("int64")
     return events[["event_id", "session_key", "split", "eventdate", "event_type", "timeframe_ms",
                    "query_id", "item_id", "order_number", "time_group"]]
@@ -230,10 +242,13 @@ def build_histories(queries, events, max_events):
                "source_query_id", "event_timeframe_ms", "age_ms", "history_position"]
     for query in queries.itertuples(index=False):
         session = groups[query.session_key]
+        # Cut at the first event at or after the query time. Even ties are excluded.
         stop = session.timeframe_ms.searchsorted(query.query_timeframe_ms, side="left")
         earlier = session.iloc[:stop]
+        # Views and purchases can have no query ID, so keep those earlier events too.
         earlier = earlier.loc[earlier.query_id.ne(query.query_id).fillna(True)]
         available.append(len(earlier))
+        # Keep the most recent events and record both counts to show what was trimmed.
         prefix = earlier.tail(max_events).copy()
         used.append(len(prefix))
         prefix = prefix.rename(columns={"query_id": "source_query_id", "event_id": "history_event_id",
@@ -264,8 +279,10 @@ def prepare_samples(config_path=Path("config/anonymous_samples.json")):
         if not (raw / name).is_file():
             raise FileNotFoundError(raw / name)
     print("Prepare anonymous-session samples: verify source files", flush=True)
+    # Fingerprints let us check whether the inputs and settings match a previous run.
     hashes = {name: file_hash(raw / name) for name in RAW_FILES}
     protocol_hash = hashlib.sha256(json.dumps(protocol, sort_keys=True).encode()).hexdigest()
+    # Reuse the saved tables only if the inputs and table contents still match.
     if output.exists():
         manifest_path = output / "manifest.json"
         if not manifest_path.exists():
@@ -280,9 +297,12 @@ def prepare_samples(config_path=Path("config/anonymous_samples.json")):
         return output
 
     print("Select whole sessions without opening confirmation outcomes", flush=True)
+    # 1. Sample complete sessions across the four date splits.
     selected, meta = select_sessions(raw, protocol)
+    # 2. Read the visible queries and turn each shown item into a labelled row.
     source_queries = load_visible_queries(raw, meta)
     candidates, clicks = build_candidates_and_clicks(raw, source_queries)
+    # 3. Build the full event log, then cut it at each query to make its history.
     events = build_events(raw, source_queries, clicks, selected)
     queries = source_queries.rename(columns={
         "queryId": "query_id", "timeframe": "query_timeframe_ms",
@@ -291,12 +311,15 @@ def prepare_samples(config_path=Path("config/anonymous_samples.json")):
     queries["query_tokens"] = queries.query_tokens.fillna("")
     queries["candidate_count"] = queries.query_id.map(candidates.groupby("query_id").size()).astype("int64")
     queries, histories = build_histories(queries, events, protocol["history_max_events"])
+    # 4. Create the session summary, reserved query list, and product catalog.
     sessions = selected.rename(columns={"eventdate": "date"})[[
         "session_key", "split", "date", "query_count", "first_query_timeframe_ms", "last_query_timeframe_ms",
     ]].sort_values(["date", "session_key"]).reset_index(drop=True)
+    # Save just enough metadata to find the confirmation queries for final evaluation.
     reserved = meta.loc[meta.split == "confirmation"].rename(columns={
         "queryId": "query_id", "timeframe": "query_timeframe_ms",
     })[["query_id", "session_key", "eventdate", "query_timeframe_ms"]].sort_values(["eventdate", "session_key", "query_timeframe_ms", "query_id"])
+    # Keep every catalog item, including items with no category recorded.
     products = pd.read_csv(raw / "products.csv", sep=";", dtype={"product.name.tokens": "string"}).merge(
         pd.read_csv(raw / "product-categories.csv", sep=";"), on="itemId", how="left", validate="one_to_one",
     ).rename(columns={"itemId": "item_id", "categoryId": "category_id", "pricelog2": "price_log2", "product.name.tokens": "name_tokens"})
@@ -320,6 +343,7 @@ def prepare_samples(config_path=Path("config/anonymous_samples.json")):
     if not actual_counts.eq(sessions.set_index("session_key").query_count.reindex(actual_counts.index)).all():
         raise AssertionError("Selected sessions are incomplete")
 
+    # 5. Record sample sizes and data issues that a reviewer can inspect.
     audit = dict(
         all_sessions_complete=True, personal_identifiers_exported=False,
         confirmation_outcomes_materialized=False,
@@ -342,6 +366,8 @@ def prepare_samples(config_path=Path("config/anonymous_samples.json")):
         ) for name, spec in protocol["splits"].items()},
     )
     output.parent.mkdir(parents=True, exist_ok=True)
+    # 6. Write the complete set in a temporary folder before moving it into place.
+    # A failed write leaves the final output path free for a retry.
     with tempfile.TemporaryDirectory(prefix=output.name + ".pending-", dir=output.parent) as temporary:
         folder = Path(temporary)
         for name, frame in tables.items():

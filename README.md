@@ -52,26 +52,29 @@ session remains in `events`. Equal timestamps are grouped, not assigned a known
 true order. Session boundaries use source session ID plus source date; this is
 not a verified inactivity timeout. Confirmation outcomes are not materialized.
 
-The default `uv run main.py` and explicit `uv run main.py prepare` both run
-step 1 of the new anonymous study. They prepare samples and stop. Steps 2–6
-will be added when they support the new anonymous table schema.
+## Step 2: train and compare LightGBM rankers
 
-## Start here: `main.py`
-
-The root `main.py` is the high-level entry point for the new anonymous study:
-
-```python
-from session_rerank.samples import prepare_samples
-
-
-def main(config_path=DEFAULT_CONFIG):
-    dataset_folder = prepare_samples(config_path)
-    return dataset_folder
+```powershell
+uv run main.py train
 ```
 
-Ctrl+click `prepare_samples` to follow the implementation in `samples.py`.
-The main file currently runs only the completed preparation stage. It does not
-continue into model training or the earlier benchmark.
+This runs Step 1 first and reuses the prepared tables when their checksums match.
+The default command and the explicit `prepare` action run Step 1 by itself.
+
+Start in `main.py` and Ctrl+click `train_rankers` to follow the two model fits.
+The feature builder in `ranker_features.py` joins the query, candidate, and
+product tables and adds earlier activity. Both models learn from the same query
+groups and use the same validation grid. The second model also sees earlier
+clicks and views in the current session. The original search order is a baseline
+and breaks ties between equal model scores.
+
+Each run saves its own folder under `results/anonymous_rankers/` containing both
+models, feature gains, tuning results in `run.json`, NDCG@10 and Recall@10 in
+`validation_metrics.csv`, and one row per validation candidate in
+`validation_scores.parquet`. Queries with no recorded click on a shown product
+are counted separately and still get scores. The ranking metrics cover queries
+with at least one observed candidate click. Selection and confirmation are
+reserved for later stages.
 
 ## Earlier benchmark for reference
 
@@ -205,7 +208,7 @@ format remain readable alongside their examples and receipt files.
 
 ## Refactor verification
 
-All 46 tests pass in the Linux Python 3.11 verification environment, including
+All 47 tests pass in the Linux Python 3.11 verification environment, including
 the real-data split check. A small deterministic experiment matches the original
 pipeline's model choices, policies, per-query relevance/diversity metrics, and
 recommendation examples. New sample tests cover complete sessions, anonymous

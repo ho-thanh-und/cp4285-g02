@@ -215,3 +215,23 @@ def test_main_prepare_forwards_the_selected_protocol(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "prepare_samples", lambda selected: called.append(selected))
     main.cli(["prepare", "--config", str(config)])
     assert called == [config]
+
+
+def test_ranker_features_respect_query_time_and_training_split(raw_experiment):
+    from session_rerank.ranker_features import build_ranker_features
+
+    _, config = raw_experiment
+    features = build_ranker_features(prepare_samples(config))
+    assert set(features.split) == {"train", "validation"}
+    rows = features.set_index(["query_id", "item_id"])
+    # Query 1's click on item 30 is available for query 2, but not for query 1.
+    assert rows.loc[(1, 30), "session_item_clicks"] == 0
+    assert rows.loc[(2, 30), "session_item_clicks"] == 1
+    assert rows.loc[(2, 30), "session_item_age_ms"] == 50
+    # The second view is exactly at query 2's timestamp and must be excluded.
+    assert rows.loc[(2, 20), "session_item_views"] == 1
+    # Global counts exclude the current day and stay frozen across validation.
+    assert rows.loc[(2, 30), "prior_product_clicks"] == 0
+    assert rows.loc[(11, 30), "prior_product_clicks"] == 1
+    assert rows.loc[(101, 30), "prior_product_clicks"] == 2
+    assert rows.loc[(111, 30), "prior_product_clicks"] == 2
