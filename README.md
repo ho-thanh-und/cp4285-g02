@@ -1,5 +1,60 @@
 # Session-Aware Product Re-ranking
 
+## Step 1 for the anonymous session study
+
+Create the new small sample tables without training models:
+
+```powershell
+uv run main.py prepare
+```
+
+Read `src/session_rerank/samples.py` for this preparation workflow. Its settings
+are in `config/anonymous_samples.json`. Targets are 2,000 training queries,
+500 validation queries, 1,000 selection queries, and 1,000 reserved confirmation
+queries. Sampling keeps complete daily sessions, so a target can be exceeded.
+Personal user IDs and post-query duration are not exported.
+
+The output folder is `data/anonymous_samples/`. It contains:
+
+| Table | Purpose |
+|---|---|
+| `products.parquet` | Static product/category/token metadata |
+| `sessions.parquet` | Complete selected anonymous daily sessions and split assignment |
+| `queries.parquet` | Train/validation/selection queries and history availability |
+| `candidates.parquet` | Original ranked candidate lists and observed click labels |
+| `clicks.parquet` | Click events, original rank, match status, and click order |
+| `events.parquet` | Complete query/click/view/purchase logs for visible sessions |
+| `histories.parquet` | Strictly earlier same-session events allowed for each query |
+| `confirmation_ids.parquet` | Reserved confirmation metadata, without outcomes |
+
+`audit.json` records data quality and sample counts. `manifest.json` records
+settings, source checksums, table schemas, and prepared-file checksums. A second
+prepare run verifies and reuses identical outputs; changed settings or source
+files require a fresh output directory rather than silently replacing samples.
+
+Generate a review containing all column distributions, a column dictionary,
+actual sample rows, table relationships, and a complete SQLite copy:
+
+```powershell
+uv run python scripts/review_samples.py
+```
+
+Open `results/anonymous-samples-review.html` in a browser. All charts work offline.
+The full data is in `results/anonymous-samples.sqlite`; the profiles are also saved
+as JSON beside the HTML. Graphs use all prepared rows; displayed example rows
+are only samples. Clicks with missing/ambiguous candidate matches retain NULL
+ranks and a diagnostic status. Nonclicked candidates are not confirmed dislikes.
+
+Histories currently retain at most 100 earlier events per query; the complete
+session remains in `events`. Equal timestamps are grouped, not assigned a known
+true order. Session boundaries use source session ID plus source date; this is
+not a verified inactivity timeout. Confirmation outcomes are not materialized.
+
+The `prepare` action is the new anonymous study's step 1. The default
+`uv run main.py` and `uv run cp4285 run` still execute the earlier benchmark,
+whose later features include personal/older-session context. Those later stages
+have not yet been converted to the new anonymous sample schema.
+
 ## Start here: `main.py`
 
 The complete experiment is expressed as six steps in the repository's root
@@ -136,10 +191,12 @@ format remain readable alongside their examples and receipt files.
 
 ## Refactor verification
 
-All 32 tests pass in the Linux Python 3.11 verification environment, including
+All 44 tests pass in the Linux Python 3.11 verification environment, including
 the real-data split check. A small deterministic experiment matches the original
 pipeline's model choices, policies, per-query relevance/diversity metrics, and
-recommendation examples. Additional checks cover freeze protection, cached
+recommendation examples. New sample tests cover complete sessions, anonymous
+exports, strict history cutoffs, original click ranks, and confirmation
+separation. Additional checks cover freeze protection, cached
 confirmation reuse, and the training variants. Both run commands' help screens
 were verified, and Windows x64 dependency planning passed. The checks ran in
 Linux; the Windows runtime and full model training were not exercised as part

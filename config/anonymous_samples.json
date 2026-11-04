@@ -1,0 +1,12 @@
+{
+  "raw_directory": "data/raw",
+  "output_directory": "data/anonymous_samples",
+  "seed": 4285,
+  "history_max_events": 100,
+  "splits": {
+    "train": {"start": "2016-04-01", "end_exclusive": "2016-04-30", "target_queries": 2000},
+    "validation": {"start": "2016-05-01", "end_exclusive": "2016-05-08", "target_queries": 500},
+    "selection": {"start": "2016-05-09", "end_exclusive": "2016-05-15", "target_queries": 1000},
+    "confirmation": {"start": "2016-05-16", "end_exclusive": "2016-06-02", "target_queries": 1000}
+  }
+}

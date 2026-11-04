@@ -1,4 +1,4 @@
-"""Read this file first: the complete experiment in six steps."""
+"""Read this file first: prepare anonymous samples or run the earlier experiment."""
 
 import argparse
 import os
@@ -41,17 +41,25 @@ def main():
 
 
 def cli(argv=None):
-    """Read command-line options, then start the experiment from its own folder.
+    """Read command-line options, then prepare samples or run the earlier experiment.
 
     argv is an optional list of arguments; None uses the terminal arguments.
     Changing folders makes paths such as data/raw work consistently.
-    --help exits before any preparation or training begins.
+    prepare creates only anonymous sample tables. The default run action uses
+    the earlier six-stage benchmark. --help starts neither action.
     """
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", nargs="?", choices=["run"], default="run")
-    parser.parse_args(argv)
+    parser.add_argument("action", nargs="?", choices=["run", "prepare"], default="run",
+                        help="prepare: anonymous sample tables only; run: earlier full benchmark")
+    parser.add_argument("--config", type=Path, default=Path("config/anonymous_samples.json"),
+                        help="Sample protocol for the prepare action")
+    args = parser.parse_args(argv)
     os.chdir(Path(__file__).resolve().parent)
-    main()
+    if args.action == "prepare":
+        from session_rerank.samples import prepare_samples
+        prepare_samples(args.config)
+    else:
+        main()
 
 
 if __name__ == "__main__":
