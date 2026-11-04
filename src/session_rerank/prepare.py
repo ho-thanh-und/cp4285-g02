@@ -15,18 +15,16 @@ SPLITS = {
 }
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--raw", type=Path, default=Path("data/raw"))
-    args = parser.parse_args()
+def audit_and_split(raw=Path("data/raw")):
+    """Read and audit CSVs, then save the original benchmark samples."""
     output = Path("data/processed")
     output.mkdir(parents=True, exist_ok=True)
-    q = pd.read_csv(args.raw / "train-queries.csv", sep=";", dtype={"searchstring.tokens": "str", "items": "str"})
-    clicks = pd.read_csv(args.raw / "train-clicks.csv", sep=";")
-    products = pd.read_csv(args.raw / "products.csv", sep=";")
-    categories = pd.read_csv(args.raw / "product-categories.csv", sep=";")
-    views = pd.read_csv(args.raw / "train-item-views.csv", sep=";")
-    purchases = pd.read_csv(args.raw / "train-purchases.csv", sep=";")
+    q = pd.read_csv(raw / "train-queries.csv", sep=";", dtype={"searchstring.tokens": "str", "items": "str"})
+    clicks = pd.read_csv(raw / "train-clicks.csv", sep=";")
+    products = pd.read_csv(raw / "products.csv", sep=";")
+    categories = pd.read_csv(raw / "product-categories.csv", sep=";")
+    views = pd.read_csv(raw / "train-item-views.csv", sep=";")
+    purchases = pd.read_csv(raw / "train-purchases.csv", sep=";")
     assert q.queryId.is_unique and products.itemId.is_unique
     assert not categories.itemId.duplicated().any(), "Multi-category products require a set representation"
     linked = clicks.merge(q[["queryId", "sessionId", "eventdate", "timeframe", "is.test"]], on="queryId", how="left", suffixes=("", "_query"), validate="many_to_one")
@@ -92,6 +90,13 @@ def main():
     Path("results").mkdir(exist_ok=True)
     Path("results/data_audit.json").write_text(json.dumps(audit, indent=2, default=int) + "\n")
     print(json.dumps({k:v for k,v in audit.items() if k not in ['daily_query_counts','splits']}, indent=2, default=int), flush=True)
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--raw", type=Path, default=Path("data/raw"))
+    args = parser.parse_args()
+    audit_and_split(args.raw)
 
 
 if __name__ == "__main__":

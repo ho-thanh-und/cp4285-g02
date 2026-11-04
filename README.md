@@ -1,50 +1,118 @@
 # Session-Aware Product Re-ranking
 
+## Start here: `main.py`
+
+The complete experiment is expressed as six steps in the repository's root
+`main.py`:
+
+```python
+prepare_dataset()
+train_models()
+comparison = compare_models()
+settings = choose_diversification(comparison)
+results = freeze_and_evaluate(comparison, settings)
+save_results(results)
+```
+
+Read `main.py` first, then follow each function into `src/session_rerank/pipeline`.
+The functions return named results where the next step needs them. Large datasets
+and fitted models are saved on disk rather than passed around in memory.
+
+| Step | File in `src/session_rerank/pipeline` | What happens |
+|---|---|---|
+| 1. Prepare the dataset | `dataset.py` | Audit the CSVs; make time-based samples, histories, and tree features; reserve selection and confirmation queries. No models are trained here. |
+| 2. Train multiple models | `training.py` | Fit the original reference, two view-feature trees, three contextual trees (including the anonymous-user control), GRU4Rec/BPR, GRU4Rec/CE, and SASRec/CE. |
+| 3. Compare models | `comparison.py` | Nominate tree, neural, and combined-score candidates using validation; choose the highest NDCG on the fresh selection sample. |
+| 4. Choose diversification | `diversification.py` | Compare fixed relevance/diversity weights, history gates, and adaptive policies on the original validation sample. |
+| 5. Freeze and evaluate | `evaluation.py` | Save model fingerprints and choices before evaluating reserved confirmation queries; measure relevance and token variety. |
+| 6. Save results | `reporting.py` | Write tables, recommendation examples, statistics, and charts. |
+
+`state.py` holds the small result objects and saved-file paths shared by these
+steps. The existing lower-level code still implements the scientific work:
+
+- `prepare.py`, `optimization_data.py`, `view_features.py`, and `iteration3.py`:
+  samples, causal history, and features.
+- `benchmark.py`, `optimize_ranker.py`, `recbole_model.py`, and `neural_search.py`:
+  reference, tree, and neural training.
+- `iteration3_report.py`, `optimization_report.py`, `policies.py`, and `core.py`:
+  score combinations, re-ranking, metrics, policy search, and reporting.
+
+The refactor preserves the existing feature definitions, model parameters,
+selection rules, diversification search, and statistical calculations. The
+results documented below are the original reported experiment, not a new full
+training run of this branch.
+
 ## Run on Windows with uv
 
 Open PowerShell in `C:\Nam-projects\Cp4285-Diginetica\cp4285-g02`:
 
 ```powershell
 uv sync --locked
-uv run cp4285 --help
-uv run pytest tests/test_core.py -q
+uv run main.py --help
+uv run pytest -q
 ```
-
-Run all available tests with `uv run pytest -q`. The real-data split check is
-skipped until the processed benchmark files exist.
 
 Run the complete experiment when sufficient disk space is available:
 
 ```powershell
-uv run cp4285 run
+uv run main.py
 ```
 
-The equivalent module command is
-`uv run python -m session_rerank.iteration3 run`.
-The first `uv run` can also perform the environment sync automatically.
-There is no manual activation step and no `.env` or API key is required.
+`uv run cp4285 run` and `uv run python -m session_rerank.iteration3 run` call
+the same six-step flow. The existing `cp4285 prepare`, `context`, and `train`
+commands, including their options, remain available for individual legacy tasks;
+`cp4285 prepare` only reserves iteration-3 queries and requires earlier processed
+data. Use `main.py` for preparation from a fresh checkout.
 
-The project uses Python 3.11 (`.python-version`), a reproducible `uv.lock`,
-CPU-only PyTorch on Windows/Linux, and the default `dev` group for pytest.
-Keep both `.python-version` and `uv.lock` in version control. The older
+The first `uv run` can perform the environment sync automatically. There is no
+manual activation step and no `.env` or API key is required. The project uses
+Python 3.11 (`.python-version`), a reproducible `uv.lock`, CPU-only PyTorch on
+Windows/Linux, and the default `dev` group for pytest. The older
 `requirements*.lock.txt` files record earlier environments and are not the
 installation source for this uv setup.
 
 The local checkout's `data/raw` files link to the existing Diginetica CSVs in
 its sibling dataset directory, so they do not consume another full dataset
-copy. Treat raw CSVs as read-only: edits to a hard-linked file also affect
-its original path. Other machines must supply the six CSVs in `data/raw` or
-allow the pipeline's public-data downloader to obtain them.
+copy. Treat raw CSVs as read-only: edits to a hard-linked file also affect its
+original path. Other machines must supply the six CSVs in `data/raw` or allow
+the pipeline's public-data downloader to obtain them.
 
-Results are written below `results/iteration3`, including confirmation tables,
-recommendation examples and figures. Full preparation and training require
-more disk space than the environment alone.
+## Saved results and restarting
 
-Verification of this setup: Windows x64 dependency planning passed. The full
-suite passed in a separate Linux Python 3.11 verification environment with
-19 passed and one processed-data check skipped. Windows commands were not
-executed directly from the current WSL session; the first Windows `uv run`
-creates its own `.venv` using the same lock file.
+The final report files are saved under `results/iteration3/`:
+
+- `confirmation_summary.csv`: relevance and token-variety results with intervals.
+- `confirmation_paired_differences.csv`, `confirmation_slices.csv`, and
+  `improvement_vs_previous.csv`: statistical comparisons and subgroup results.
+- `confirmation_examples.json`: example recommendation lists.
+- `figures/`: relevance, diversification, and model-comparison charts.
+- `frozen_selection.json` and `confirmation_receipt.json`: recorded choices,
+  input fingerprints, and evaluation receipt.
+
+Earlier stages also save model files, validation/selection tables, and audits.
+Processed data is under `data/processed`, `data/processed_v2`, and `data/iteration3`;
+reference and earlier-model outputs remain under `results/` and
+`results/optimization/`. Full preparation and training require more disk space
+than the environment alone.
+
+Completed preparation and training stages are reused. After candidates have
+been recorded for fresh selection, training is disabled. After choices are
+frozen, they cannot be replaced by rerunning the pipeline. Confirmation outcomes
+are cached in `confirmation_per_query.npz`; rerunning `main.py` reuses them and
+regenerates report files. A reporting failure can be retried without evaluating
+confirmation again. Existing completed experiments using the earlier cache
+format remain readable alongside their examples and receipt files.
+
+## Refactor verification
+
+All 32 tests pass in the Linux Python 3.11 verification environment, including
+the real-data split check. A small deterministic experiment matches the original
+pipeline's model choices, policies, per-query relevance/diversity metrics, and
+recommendation examples. Additional checks cover freeze protection, cached
+confirmation reuse, and the training variants. Both run commands' help screens
+were verified, and Windows x64 dependency planning passed. The checks ran in
+Linux; the Windows runtime and full model training were not exercised as part
+of this refactor.
 
 ## Methodology
 

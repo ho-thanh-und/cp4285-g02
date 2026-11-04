@@ -4,8 +4,6 @@ from collections import defaultdict
 import hashlib
 import json
 from pathlib import Path
-import subprocess
-import sys
 import numpy as np
 import pandas as pd
 from scipy import sparse
@@ -214,27 +212,9 @@ def main():
 
 
 def run_all():
-    """Run from a fresh checkout or resume completed training stages safely."""
-    def run(*arguments):subprocess.run([sys.executable,*arguments],check=True)
-    if not Path('data/processed_v2/train/manifest.json').exists():
-        run('-m','session_rerank.run_experiment','prepare')
-    if not (ROOT/'confirmation_ids.parquet').exists():
-        reserve_and_prepare()
-    elif not (ROOT/'selection_queries.parquet').exists():reserve_and_prepare()
-    if (OUT/'frozen_selection.json').exists():
-        if not (OUT/'confirmation_per_query.npz').exists():run('-m','session_rerank.iteration3_report','confirm')
-        return
-    for name,arguments in [('views_60k',['--features','views']),('views_60k_63',['--features','views','--leaves','63'])]:
-        if not Path(f'results/optimization/{name}.txt').exists():
-            run('-m','session_rerank.optimize_ranker','--name',name,*arguments)
-    if not Path('results/optimization/recbole_gru4rec.pth').exists():run('-m','session_rerank.recbole_model','train')
-    for split in ['validation','train']:build_split(split)
-    for name,leaves,anonymous in [('collab31',31,False),('collab63',63,False),('anonymous31',31,True)]:
-        if not (OUT/f'{name}.json').exists():train_tree(name,leaves,anonymous)
-    for variant in ['sas_ce','gru_ce']:
-        if not (OUT/f'{variant}.json').exists():run('-m','session_rerank.neural_search','train','--variant',variant)
-    run('-m','session_rerank.iteration3_report','select')
-    run('-m','session_rerank.iteration3_report','confirm')
+    """Compatibility entry point for the readable main.py pipeline."""
+    from main import main as run_pipeline
+    run_pipeline()
 
 
 if __name__=='__main__':main()

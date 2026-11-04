@@ -162,6 +162,17 @@ def evaluate(examples, catalog, model, name):
         ms_per_query_all_nine_weights_plus_metrics=1000*seconds/len(examples),note='Sequential local CPU benchmark; includes distance construction, nine re-rankings and metrics; excludes model prediction and data loading.'),indent=2)+'\n')
 
 
+def develop_reference_model():
+    """Fit the original reference ranker and evaluate its validation sample."""
+    if Path('results/frozen_policies.json').exists():
+        raise RuntimeError('This experiment is frozen. Reuse its recorded reference model.')
+    catalog = Catalog()
+    training = load_examples('train', catalog)
+    model = train(training)
+    del training
+    evaluate(load_examples('validation', catalog), catalog, model, 'validation')
+
+
 def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--stage',choices=['development','test'],default='development')
@@ -175,14 +186,10 @@ def main():
         frozen=json.loads(Path('results/frozen_policies.json').read_text())
         if frozen['model_sha256']!=file_hash('results/model.txt') or frozen['protocol_sha256']!=file_hash('config/protocol.json'):
             raise RuntimeError('Model or protocol changed after policy freeze')
-    catalog=Catalog()
     if args.stage=='development':
-        training=load_examples('train',catalog)
-        model=train(training)
-        del training
-        examples=load_examples('validation',catalog)
-        evaluate(examples,catalog,model,'validation')
+        develop_reference_model()
     else:
+        catalog=Catalog()
         if Path('results/cache/test.npz').exists():
             raise RuntimeError('Test cache already exists. Reuse it for reporting; do not silently rerun.')
         model=lgb.Booster(model_file='results/model.txt')
