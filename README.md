@@ -5,6 +5,8 @@
 Create the new small sample tables without training models:
 
 ```powershell
+uv run main.py
+# Equivalent explicit action:
 uv run main.py prepare
 ```
 
@@ -50,28 +52,39 @@ session remains in `events`. Equal timestamps are grouped, not assigned a known
 true order. Session boundaries use source session ID plus source date; this is
 not a verified inactivity timeout. Confirmation outcomes are not materialized.
 
-The `prepare` action is the new anonymous study's step 1. The default
-`uv run main.py` and `uv run cp4285 run` still execute the earlier benchmark,
-whose later features include personal/older-session context. Those later stages
-have not yet been converted to the new anonymous sample schema.
+The default `uv run main.py` and explicit `uv run main.py prepare` both run
+step 1 of the new anonymous study. They prepare samples and stop. Steps 2–6
+will be added when they support the new anonymous table schema.
 
 ## Start here: `main.py`
 
-The complete experiment is expressed as six steps in the repository's root
-`main.py`:
+The root `main.py` is the high-level entry point for the new anonymous study:
 
 ```python
-prepare_dataset()
-train_models()
-comparison = compare_models()
-settings = choose_diversification(comparison)
-results = freeze_and_evaluate(comparison, settings)
-save_results(results)
+from session_rerank.samples import prepare_samples
+
+
+def main(config_path=DEFAULT_CONFIG):
+    dataset_folder = prepare_samples(config_path)
+    return dataset_folder
 ```
 
-Read `main.py` first, then follow each function into `src/session_rerank/pipeline`.
-The functions return named results where the next step needs them. Large datasets
-and fitted models are saved on disk rather than passed around in memory.
+Ctrl+click `prepare_samples` to follow the implementation in `samples.py`.
+The main file currently runs only the completed preparation stage. It does not
+continue into model training or the earlier benchmark.
+
+## Earlier benchmark for reference
+
+The earlier complete experiment is kept in
+`src/session_rerank/pipeline/legacy.py`, under `run_legacy_experiment()`.
+Its features include personal and older-session context, so it is distinct from
+the new anonymous-session study. Its existing full-run command remains:
+
+```powershell
+uv run cp4285 run
+```
+
+The following file map describes that earlier benchmark:
 
 | Step | File in `src/session_rerank/pipeline` | What happens |
 |---|---|---|
@@ -92,7 +105,7 @@ steps. The existing lower-level code still implements the scientific work:
 - `iteration3_report.py`, `optimization_report.py`, `policies.py`, and `core.py`:
   score combinations, re-ranking, metrics, policy search, and reporting.
 
-The refactor preserves the existing feature definitions, model parameters,
+The earlier benchmark preserves its feature definitions, model parameters,
 selection rules, diversification search, and statistical calculations. The
 results documented below are the original reported experiment, not a new full
 training run of this branch.
@@ -135,14 +148,14 @@ uv run main.py --help
 uv run pytest -q
 ```
 
-Run the complete experiment when sufficient disk space is available:
+Run the new anonymous sample preparation:
 
 ```powershell
 uv run main.py
 ```
 
 `uv run cp4285 run` and `uv run python -m session_rerank.iteration3 run` call
-the same six-step flow. The existing `cp4285 prepare`, `context`, and `train`
+the earlier six-step benchmark in `pipeline/legacy.py`. The existing `cp4285 prepare`, `context`, and `train`
 commands, including their options, remain available for individual legacy tasks;
 `cp4285 prepare` only reserves iteration-3 queries and requires earlier processed
 data. Use `main.py` for preparation from a fresh checkout.
@@ -161,9 +174,10 @@ and SHA-256 checksums, is `data/source/dataset_relocation.json`.
 
 Treat raw CSVs as read-only. The `/data/` rule in `.gitignore` keeps these large
 local files out of Git commits. Other machines must supply the six CSVs in
-`data/raw` or allow the pipeline's public-data downloader to obtain them.
+`data/raw` before running the anonymous sampler. The earlier benchmark also
+has a public-data downloader.
 
-## Saved results and restarting
+## Earlier benchmark results and restarting
 
 The final report files are saved under `results/iteration3/`:
 
@@ -184,14 +198,14 @@ than the environment alone.
 Completed preparation and training stages are reused. After candidates have
 been recorded for fresh selection, training is disabled. After choices are
 frozen, they cannot be replaced by rerunning the pipeline. Confirmation outcomes
-are cached in `confirmation_per_query.npz`; rerunning `main.py` reuses them and
-regenerates report files. A reporting failure can be retried without evaluating
+are cached in `confirmation_per_query.npz`; rerunning `uv run cp4285 run`
+reuses them and regenerates report files. A reporting failure can be retried without evaluating
 confirmation again. Existing completed experiments using the earlier cache
 format remain readable alongside their examples and receipt files.
 
 ## Refactor verification
 
-All 44 tests pass in the Linux Python 3.11 verification environment, including
+All 46 tests pass in the Linux Python 3.11 verification environment, including
 the real-data split check. A small deterministic experiment matches the original
 pipeline's model choices, policies, per-query relevance/diversity metrics, and
 recommendation examples. New sample tests cover complete sessions, anonymous
@@ -202,7 +216,7 @@ were verified, and Windows x64 dependency planning passed. The checks ran in
 Linux; the Windows runtime and full model training were not exercised as part
 of this refactor.
 
-## Methodology
+## Earlier benchmark methodology
 
 Re-rank Diginetica's complete candidate lists using information available before
 each query. Daily sessions provide up to ten distinct prior clicked products.
@@ -218,7 +232,7 @@ when click history exists, otherwise the tree score.
 Greedy re-ranking balances relevance and token Jaccard distance. Select fixed
 and session-adaptive weights within a 2% validation NDCG loss budget.
 
-## Results
+## Earlier reported results
 
 All rows use the same **9,865 newly reserved confirmation queries and 1,492,509
 candidates**. Session IDs exclude both earlier test/confirmation samples.

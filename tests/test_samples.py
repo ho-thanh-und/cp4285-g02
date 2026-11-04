@@ -194,3 +194,24 @@ def test_equal_click_times_share_order_without_changing_original_rank(raw_experi
     assert observed.loc[30, "original_rank"] == 3
     assert observed.loc[20, "original_rank"] == 2
     assert observed.loc[10, "original_rank"] == 1
+
+
+def test_main_default_prepares_anonymous_samples_without_legacy_training(tmp_path, monkeypatch):
+    import main
+    from session_rerank.pipeline import legacy
+    monkeypatch.chdir(tmp_path)
+    called = []
+    monkeypatch.setattr(main, "prepare_samples", lambda config: called.append(config))
+    monkeypatch.setattr(legacy, "run_legacy_experiment", lambda: pytest.fail("Default command entered the old benchmark"))
+    main.cli([])
+    assert called == [Path("config/anonymous_samples.json")]
+
+
+def test_main_prepare_forwards_the_selected_protocol(tmp_path, monkeypatch):
+    import main
+    monkeypatch.chdir(tmp_path)
+    config = tmp_path / "custom-protocol.json"
+    called = []
+    monkeypatch.setattr(main, "prepare_samples", lambda selected: called.append(selected))
+    main.cli(["prepare", "--config", str(config)])
+    assert called == [config]

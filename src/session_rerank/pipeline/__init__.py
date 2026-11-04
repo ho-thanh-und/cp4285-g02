@@ -1,4 +1,4 @@
-"""The six stages called by the project's main.py."""
+"""Stages of the earlier benchmark. The new main.py starts with samples.py."""
 
 from .dataset import prepare_dataset
 from .training import train_models

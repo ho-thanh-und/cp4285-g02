@@ -269,7 +269,7 @@ def main():
     """Handle the older prepare/context/train/run commands.
 
     prepare reserves iteration-3 queries; context builds a split; train fits
-    one contextual tree; run delegates to the six-stage root main.py.
+    one contextual tree; run delegates to the earlier six-stage benchmark.
     """
     parser=argparse.ArgumentParser()
     parser.add_argument('action',choices=['prepare','context','train','run'])
@@ -284,9 +284,9 @@ def main():
 
 
 def run_all():
-    """Keep the existing full-run command working by calling root main.main()."""
-    from main import main as run_pipeline
-    run_pipeline()
+    """Run the earlier benchmark without entering the new anonymous pipeline."""
+    from .pipeline.legacy import run_legacy_experiment
+    run_legacy_experiment()
 
 
 if __name__=='__main__':main()

@@ -1,65 +1,42 @@
-"""Read this file first: prepare anonymous samples or run the earlier experiment."""
+"""Start the new anonymous-session pipeline. Currently, step 1 is implemented."""
 
 import argparse
 import os
 from pathlib import Path
 
-# Import each function from its implementation file so Go to Definition
-# can take you directly to the stage you want to understand.
-from session_rerank.pipeline.dataset import prepare_dataset
-from session_rerank.pipeline.training import train_models
-from session_rerank.pipeline.comparison import compare_models
-from session_rerank.pipeline.diversification import choose_diversification
-from session_rerank.pipeline.evaluation import freeze_and_evaluate
-from session_rerank.pipeline.reporting import save_results
+# Ctrl+click this function to read the anonymous sample preparation code.
+from session_rerank.samples import prepare_samples
+
+DEFAULT_CONFIG = Path("config/anonymous_samples.json")
 
 
-def main():
-    """Run the complete experiment in the order described in the report.
+def main(config_path=DEFAULT_CONFIG):
+    """Run the implemented stages of the new anonymous-session study.
 
-    Each call below is one stage. Data and fitted models are saved on disk;
-    comparison, settings, and results carry the choices between stages.
-    Returns nothing: the final tables, examples, and charts are saved by step 6.
+    Step 1 creates complete session samples, candidate/click tables, and
+    strictly earlier session histories. Confirmation has reserved IDs only.
+    Returns the prepared-data folder. Model training and later stages will
+    be added here when they support this new anonymous table format.
     """
-    # 1. Turn raw CSVs into samples, past histories, and model features.
-    prepare_dataset()
-
-    # 2. Learn relevance scores using trees, GRU4Rec, and SASRec.
-    train_models()
-
-    # 3. Compare relevance models and mixtures; carry the winner forward.
-    comparison = compare_models()
-
-    # 4. Decide how much variety to add, using validation queries only.
-    settings = choose_diversification(comparison)
-
-    # 5. Lock those decisions, then evaluate the reserved confirmation queries.
-    results = freeze_and_evaluate(comparison, settings)
-
-    # 6. Save tables, example recommendations, statistics, and charts.
-    save_results(results)
+    # 1. Prepare the anonymous samples and their query-time histories.
+    dataset_folder = prepare_samples(config_path)
+    return dataset_folder
 
 
 def cli(argv=None):
-    """Read command-line options, then prepare samples or run the earlier experiment.
+    """Read optional preparation settings and start the new pipeline.
 
-    argv is an optional list of arguments; None uses the terminal arguments.
-    Changing folders makes paths such as data/raw work consistently.
-    prepare creates only anonymous sample tables. The default run action uses
-    the earlier six-stage benchmark. --help starts neither action.
+    Both `uv run main.py` and `uv run main.py prepare` call main() above.
+    --config selects the sample protocol. --help performs no preparation.
     """
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", nargs="?", choices=["run", "prepare"], default="run",
-                        help="prepare: anonymous sample tables only; run: earlier full benchmark")
-    parser.add_argument("--config", type=Path, default=Path("config/anonymous_samples.json"),
-                        help="Sample protocol for the prepare action")
+    parser.add_argument("action", nargs="?", choices=["prepare"], default="prepare",
+                        help="Prepare the new anonymous-session sample tables")
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG,
+                        help="Sample sizes, date periods, and history limit")
     args = parser.parse_args(argv)
     os.chdir(Path(__file__).resolve().parent)
-    if args.action == "prepare":
-        from session_rerank.samples import prepare_samples
-        prepare_samples(args.config)
-    else:
-        main()
+    main(args.config)
 
 
 if __name__ == "__main__":

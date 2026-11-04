@@ -128,8 +128,8 @@ def toy_experiment(tmp_path, monkeypatch):
     return make_toy_experiment(tmp_path, monkeypatch)
 
 
-def test_main_calls_the_six_stages_with_their_results(monkeypatch):
-    import main
+def test_legacy_pipeline_calls_the_six_stages_with_their_results(monkeypatch):
+    from session_rerank.pipeline import legacy
     events = []
 
     def record(name, result=None):
@@ -143,8 +143,8 @@ def test_main_calls_the_six_stages_with_their_results(monkeypatch):
         ("choose_diversification", "policies"), ("freeze_and_evaluate", "evaluation"),
         ("save_results", None),
     ]:
-        monkeypatch.setattr(main, name, record(name, result))
-    main.main()
+        monkeypatch.setattr(legacy, name, record(name, result))
+    legacy.run_legacy_experiment()
     assert events == [
         ("prepare_dataset", ()), ("train_models", ()), ("compare_models", ()),
         ("choose_diversification", ("comparison",)),
@@ -302,10 +302,10 @@ def test_confirmation_rejects_overlapping_sessions(toy_experiment):
     assert not EVALUATION_CACHE.exists()
 
 
-def test_legacy_entry_point_uses_the_same_main(monkeypatch):
-    import main
+def test_legacy_entry_point_uses_the_legacy_pipeline(monkeypatch):
+    from session_rerank.pipeline import legacy
     from session_rerank.iteration3 import run_all
     called = []
-    monkeypatch.setattr(main, "main", lambda: called.append("six stages"))
+    monkeypatch.setattr(legacy, "run_legacy_experiment", lambda: called.append("six stages"))
     run_all()
     assert called == ["six stages"]
