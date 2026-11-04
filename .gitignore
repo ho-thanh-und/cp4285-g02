@@ -60,7 +60,6 @@ htmlcov/
 .env.*
 !.env.example
 !.env.sample
-.python-version
 
 # Temporary files, logs and operating-system metadata
 /tmp/

@@ -1,5 +1,51 @@
 # Session-Aware Product Re-ranking
 
+## Run on Windows with uv
+
+Open PowerShell in `C:\Nam-projects\Cp4285-Diginetica\cp4285-g02`:
+
+```powershell
+uv sync --locked
+uv run cp4285 --help
+uv run pytest tests/test_core.py -q
+```
+
+Run all available tests with `uv run pytest -q`. The real-data split check is
+skipped until the processed benchmark files exist.
+
+Run the complete experiment when sufficient disk space is available:
+
+```powershell
+uv run cp4285 run
+```
+
+The equivalent module command is
+`uv run python -m session_rerank.iteration3 run`.
+The first `uv run` can also perform the environment sync automatically.
+There is no manual activation step and no `.env` or API key is required.
+
+The project uses Python 3.11 (`.python-version`), a reproducible `uv.lock`,
+CPU-only PyTorch on Windows/Linux, and the default `dev` group for pytest.
+Keep both `.python-version` and `uv.lock` in version control. The older
+`requirements*.lock.txt` files record earlier environments and are not the
+installation source for this uv setup.
+
+The local checkout's `data/raw` files link to the existing Diginetica CSVs in
+its sibling dataset directory, so they do not consume another full dataset
+copy. Treat raw CSVs as read-only: edits to a hard-linked file also affect
+its original path. Other machines must supply the six CSVs in `data/raw` or
+allow the pipeline's public-data downloader to obtain them.
+
+Results are written below `results/iteration3`, including confirmation tables,
+recommendation examples and figures. Full preparation and training require
+more disk space than the environment alone.
+
+Verification of this setup: Windows x64 dependency planning passed. The full
+suite passed in a separate Linux Python 3.11 verification environment with
+19 passed and one processed-data check skipped. Windows commands were not
+executed directly from the current WSL session; the first Windows `uv run`
+creates its own `.venv` using the same lock file.
+
 ## Methodology
 
 Re-rank Diginetica's complete candidate lists using information available before

@@ -1,13 +1,47 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=68,<81"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "session-rerank"
 version = "0.1.0"
 description = "Reproducible Diginetica session-aware diversification benchmark"
-requires-python = ">=3.11"
-dependencies = ["numpy>=1.26,<2", "pandas>=2.2,<3", "scipy>=1.12,<1.13", "scikit-learn>=1.5,<1.6", "lightgbm", "matplotlib>=3.9,<3.10", "pyarrow>=14,<15", "requests", "recbole==1.2.1", "torch>=2.5,<2.6", "setuptools<81", "protobuf>=4.25,<5", "tensorboard>=2.18,<2.19"]
+# RecBole's Ray 2.6.x dependency has Python 3.11 wheels on Windows.
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "numpy>=1.26,<2",
+    "pandas>=2.2,<3",
+    "scipy>=1.12,<1.13",
+    "scikit-learn>=1.5,<1.6",
+    "lightgbm",
+    "matplotlib>=3.9,<3.10",
+    "pyarrow>=14,<15",
+    "requests",
+    "recbole==1.2.1",
+    "torch==2.5.1",
+    "setuptools<81",
+    "protobuf>=4.25,<5",
+    "tensorboard>=2.18,<2.19",
+]
+
+[project.scripts]
+cp4285 = "session_rerank.iteration3:main"
+
+[dependency-groups]
+dev = ["pytest>=8,<10"]
+
+[tool.uv]
+required-environments = ["sys_platform == 'win32' and platform_machine == 'AMD64'"]
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cpu", marker = "sys_platform == 'win32' or sys_platform == 'linux'" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [tool.setuptools.packages.find]
 where = ["src"]
