@@ -76,6 +76,80 @@ are counted separately and still get scores. The ranking metrics cover queries
 with at least one observed candidate click. Selection and confirmation are
 reserved for later stages.
 
+## Define product diversity
+
+```powershell
+uv run main.py diversity --ranker-run results/anonymous_rankers/20261104T192951Z-321c6432
+```
+
+Supply the folder from the training run you want to review. Start at
+`define_product_diversity` in `src/session_rerank/diversity.py`.
+
+Category distance is 0 for matching category IDs and 1 for different IDs.
+Product-name token distance uses Jaccard distance, measuring anonymized token
+overlap. The initial combined distance gives each component weight 0.5.
+These weights are a declared starting definition.
+
+ILD@10 averages the distances of all 45 unordered pairs among ten products.
+Shorter lists use their actual pair count. Zero or one product has undefined
+ILD. Missing metadata produces unknown pair distances. Each component reports
+its known-pair coverage, and the blend requires both components to be known.
+Token distance is a lexical proxy, and category IDs supply no hierarchy.
+
+Each review writes `measure.json`, `validation_diversity_by_query.csv`, and
+`validation_diversity_summary.csv` under a new `results/anonymous_diversity/`
+folder. The review measures the original order and both saved model orderings
+on all validation queries, including queries with zero clicks. It records
+the dataset and score fingerprints. Category, token, and blended ILD are
+reported separately for inspection.
+
+## Complete the remaining study stages
+
+```powershell
+uv run main.py run --ranker-run results/anonymous_rankers/20261104T192951Z-321c6432
+```
+
+Read the calls in `main.py`. Detailed comments explain each stage.
+
+1. `tune_diversification()` compares relevance-only, quota, fixed-weight and
+   session-adaptive methods on validation. The gate uses training-prefix ILD
+   quantiles. The sparse-history default comes from fixed-weight validation tuning.
+2. `compare_on_selection()` evaluates one validation-nominated setting per family
+   on the reserved selection queries.
+3. `freeze_and_evaluate()` saves input/code fingerprints and choices before
+   reading confirmation candidate lists and click outcomes.
+4. `save_study_report()` writes a single offline `report.html`, figures, CSV
+   statistics, confidence intervals and recommendation examples.
+
+The declared choice rule maximizes combined ILD with at most 5% relative
+NDCG loss and no ILD loss against relevance-only on the same split. Ties prefer
+NDCG, then the simpler family, then policy ID. All approaches use the same trained
+session-aware LightGBM model and original candidate lists. The 50/50 category/token
+blend is retained. Missing distances earn zero diversity reward during reranking
+and are reported with coverage during evaluation. History variety uses unique
+earlier clicked/viewed products, with fewer than two measurable items treated
+as sparse history.
+
+The report includes all frozen approaches and an original-order diagnostic,
+even if the selection winner loses quality on confirmation. Metrics use equal
+weight per query. Relevance excludes zero-click candidate lists, while diversity
+includes all measurable lists. Paired 95% confidence intervals use 2,000 bootstrap
+samples of entire daily sessions. Runtime measures and descriptive gain/loss
+examples are saved alongside the report.
+
+Each execution has its own `results/anonymous_study/RUN` folder. A completion
+manifest records each stage's output hashes. To continue an interrupted execution:
+
+```powershell
+uv run main.py resume --study-run results/anonymous_study/RUN
+```
+
+Use the original `--config` if a custom sample protocol was used. Resume verifies
+the recorded scientific code and input files, reuses completed stages, and keeps
+frozen choices intact. A lock prevents concurrent writers in one study folder.
+After a process crash, remove its stale `running.lock` only after verifying
+that its process has stopped.
+
 ## Earlier benchmark for reference
 
 The earlier complete experiment is kept in
@@ -208,7 +282,7 @@ format remain readable alongside their examples and receipt files.
 
 ## Refactor verification
 
-All 47 tests pass in the Linux Python 3.11 verification environment, including
+All 59 tests pass in the Linux Python 3.11 verification environment, including
 the real-data split check. A small deterministic experiment matches the original
 pipeline's model choices, policies, per-query relevance/diversity metrics, and
 recommendation examples. New sample tests cover complete sessions, anonymous

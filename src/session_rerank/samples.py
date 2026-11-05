@@ -104,7 +104,18 @@ def load_visible_queries(raw, selected_meta):
     import pandas as pd
 
     visible = selected_meta.loc[selected_meta.split != "confirmation"]
-    wanted = set(visible.queryId)
+    return load_query_rows(raw, visible)
+
+
+def load_query_rows(raw, metadata):
+    """Read candidate lists for explicitly supplied IDs while retaining their split.
+
+    Confirmation callers must check the saved frozen choices before calling this.
+    Reading in chunks avoids loading every raw candidate list into memory.
+    """
+    import pandas as pd
+
+    wanted = set(metadata.queryId)
     frames = []
     fields = ["queryId", "sessionId", "eventdate", "timeframe",
               "searchstring.tokens", "categoryId", "items"]
@@ -114,7 +125,7 @@ def load_visible_queries(raw, selected_meta):
                              chunksize=25000):
         frames.append(chunk.loc[chunk.queryId.isin(wanted)])
     queries = pd.concat(frames, ignore_index=True).merge(
-        visible[["queryId", "session_key", "split"]], on="queryId", validate="one_to_one",
+        metadata[["queryId", "session_key", "split"]], on="queryId", validate="one_to_one",
     )
     if len(queries) != len(wanted):
         raise ValueError("Selected queries were lost while reading the raw candidate lists")
@@ -179,18 +190,20 @@ def build_candidates_and_clicks(raw, source_queries):
     )
 
 
-def build_events(raw, source_queries, clicks, selected_sessions):
+def build_events(raw, source_queries, clicks, selected_sessions, *, include_confirmation=False):
     """Combine current-session queries, clicks, views, and purchases into one event log.
 
     Personal user IDs are excluded at CSV reading. The log contains complete
     selected visits, including later events; only build_histories() makes
-    prediction inputs. Confirmation events are not included.
+    prediction inputs. include_confirmation is reserved for the frozen evaluation.
     """
     import pandas as pd
 
     # Use the session ID and date to attach views and purchases to the right visit.
-    mapping = selected_sessions.loc[selected_sessions.split != "confirmation",
-                                    ["sessionId", "eventdate", "session_key", "split"]]
+    allowed = selected_sessions if include_confirmation else selected_sessions.loc[
+        selected_sessions.split != "confirmation"
+    ]
+    mapping = allowed[["sessionId", "eventdate", "session_key", "split"]]
     frames = []
     queries = source_queries[["queryId", "session_key", "split", "eventdate", "timeframe"]].rename(
         columns={"queryId": "query_id", "timeframe": "timeframe_ms"})

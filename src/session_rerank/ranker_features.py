@@ -22,7 +22,7 @@ def add_popularity(rows, train_events):
     """Count activity on earlier training days, then freeze counts for validation."""
     counts = {kind: Counter() for kind in ("click", "view")}
     train = rows[rows.split.eq("train")]
-    validation = rows[rows.split.eq("validation")]
+    evaluation = rows[~rows.split.eq("train")]
     for kind, counter in counts.items():
         column = f"prior_product_{kind}s"
         rows[column] = 0
@@ -31,10 +31,12 @@ def add_popularity(rows, train_events):
             for date, events in train_events[train_events.event_type.eq(kind)].groupby("eventdate")
         }
         # Score a whole day before adding its events so its clicks cannot leak.
-        for date, day_rows in train.groupby("eventdate", sort=True):
+        for date in sorted(set(train.eventdate) | set(events_by_date)):
+            day_rows = train[train.eventdate.eq(date)]
             rows.loc[day_rows.index, column] = day_rows.item_id.map(counter).fillna(0)
             counter.update(events_by_date.get(date, ()))
-        rows.loc[validation.index, column] = validation.item_id.map(counter).fillna(0)
+        # Later splits all use the same frozen end-of-training statistics.
+        rows.loc[evaluation.index, column] = evaluation.item_id.map(counter).fillna(0)
 
 
 def add_session_features(rows, histories, product_tokens, product_categories):
@@ -74,13 +76,20 @@ def add_session_features(rows, histories, product_tokens, product_categories):
     return rows.join(features)
 
 
-def build_ranker_features(folder):
-    """Load train and validation only. Keep click labels separate from model inputs."""
-    visible = [("split", "in", ["train", "validation"])]
-    candidates = pd.read_parquet(folder / "candidates.parquet", filters=visible)
-    queries = pd.read_parquet(folder / "queries.parquet", filters=visible)
+def build_ranker_features(folder, splits=("train", "validation"), tables=None):
+    """Build the original features for requested splits using frozen training counts.
+
+    tables supplies the confirmation tables created after choices are frozen.
+    The ordinary path reads only the requested split from prepared Parquet files.
+    """
+    visible = [("split", "in", list(splits))]
+    if tables is None:
+        candidates = pd.read_parquet(folder / "candidates.parquet", filters=visible)
+        queries = pd.read_parquet(folder / "queries.parquet", filters=visible)
+        histories = pd.read_parquet(folder / "histories.parquet", filters=visible)
+    else:
+        candidates, queries, histories = (tables[name] for name in ("candidates", "queries", "histories"))
     products = pd.read_parquet(folder / "products.parquet")
-    histories = pd.read_parquet(folder / "histories.parquet", filters=visible)
     train_events = pd.read_parquet(folder / "events.parquet", filters=[("split", "==", "train")])
 
     rows = candidates.merge(queries, on=["query_id", "split"], validate="many_to_one")
