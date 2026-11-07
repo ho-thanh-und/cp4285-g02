@@ -1,0 +1,63 @@
+{
+  "pilot_directory": "data/anonymous_samples",
+  "output_directory": "results/expanded_study",
+  "confirmation_target_queries": 2000,
+  "confirmation_seed": 52314285,
+  "query_batch_size": 500,
+  "seed": 4285,
+  "label_gains": [
+    0,
+    1,
+    3
+  ],
+  "purchase_gain_sensitivity": [
+    2,
+    5
+  ],
+  "purchase_primary_min_train_queries": 100,
+  "purchase_primary_min_validation_queries": 20,
+  "history_windows_minutes": [
+    5,
+    30
+  ],
+  "alpha_bounds": [
+    [
+      0.2,
+      1.0
+    ],
+    [
+      0.4,
+      1.0
+    ]
+  ],
+  "exponential_beta": [
+    1.0,
+    3.0
+  ],
+  "relevance_loss_limit": 0.05,
+  "bootstrap_replicates": 2000,
+  "threads": 4,
+  "training": {
+    "learning_rate": 0.05,
+    "num_boost_round": 500,
+    "early_stopping_rounds": 30,
+    "log_evaluation_period": 25,
+    "num_leaves": [
+      15,
+      31
+    ],
+    "min_data_in_leaf": [
+      100,
+      300
+    ],
+    "max_depth": -1,
+    "max_bin": 255,
+    "lambda_l1": 0.0,
+    "lambda_l2": 0.0,
+    "feature_fraction": 1.0,
+    "bagging_fraction": 1.0,
+    "bagging_freq": 0,
+    "lambdarank_truncation_level": 13
+  },
+  "top_k": 10
+}

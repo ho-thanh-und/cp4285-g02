@@ -1,5 +1,11 @@
 # Session-Aware Product Re-ranking
 
+The agreed expansion, purchase-aware training, decay experiments, and final-report
+requirements are recorded in [TRAINING_PLAN.md](TRAINING_PLAN.md). Read that plan
+before continuing implementation or drafting conclusions. The commands below
+describe the implemented pilot workflow.
+
+
 ## Step 1 for the anonymous session study
 
 Create the new small sample tables without training models:
@@ -55,7 +61,7 @@ not a verified inactivity timeout. Confirmation outcomes are not materialized.
 ## Step 2: train and compare LightGBM rankers
 
 ```powershell
-uv run main.py train
+uv run main.py pilot-train
 ```
 
 This runs Step 1 first and reuses the prepared tables when their checksums match.
@@ -331,3 +337,185 @@ selects equal diversity-branch weights and becomes a history-length gate.
 
 These offline results measure recorded clicks and lexical variety, not shopper
 satisfaction or sales.
+
+
+## Manual training sizes and hyperparameter tuning
+
+Read [TRAINING_CONFIG_GUIDE.md](TRAINING_CONFIG_GUIDE.md) for the full config,
+decay examples, early-stopping explanation, and Windows comparison recovery.
+
+Use **`config/learning_curve.json`** for manual training. Each command prepares
+and trains exactly one size, reviews the configured reranker on validation, redraws the learning
+curve, and stops. Start the next command only when you are ready:
+
+```powershell
+uv run main.py train --queries 2000
+uv run main.py train --queries 10000
+uv run main.py train --queries 50000
+uv run main.py train --queries all
+```
+
+`all` means every eligible training query (currently 145,039). Sizes are targets:
+whole sessions can put the actual count slightly above the requested count.
+The samples are nested with the same seed, and validation queries/labels remain
+identical. Every size trains fresh models. Selection and confirmation outcomes
+are not loaded. Repeating the same command verifies and resumes its completed
+stages. Source or settings changes need a new experiment directory.
+
+Always supply the sample size as a CLI argument. The editable config contains
+hyperparameters and experiment settings; it has no sample-size default:
+
+```powershell
+uv run main.py train --queries 2000 --training-config config/learning_curve.json
+```
+
+`--queries` is required for `train`, including with a custom config. Use a positive
+integer or `all`. The selected size is still recorded in each run's generated
+metadata for reproducibility. `output_directory` chooses the experiment
+folder. `primary_metric` stays fixed across all sizes; the default is
+`click_ndcg`, with graded purchase-aware NDCG and purchase recall also reported.
+
+The `training` object contains the editable LightGBM settings:
+
+| Setting | What to change |
+|---|---|
+| `learning_rate` | Update size for each tree; smaller values usually need more trees |
+| `num_boost_round` | Maximum number of trees per trial |
+| `early_stopping_rounds` | Stop after this many rounds without validation improvement |
+| `log_evaluation_period` | Print validation progress every this many rounds; 0 disables iteration logs |
+| `num_leaves` | List of tree sizes to test; more leaves allow more complex rules |
+| `min_data_in_leaf` | List of minimum leaf sizes; larger values constrain complexity |
+| `max_depth` | Maximum tree depth; -1 means unlimited |
+| `max_bin` | Maximum feature histogram bins |
+| `lambda_l1`, `lambda_l2` | Nonnegative regularization strengths |
+| `feature_fraction` | Fraction of features sampled per tree |
+| `bagging_fraction`, `bagging_freq` | Row sampling fraction and frequency; frequency 0 disables bagging |
+| `lambdarank_truncation_level` | Rank range emphasized by the ranking loss |
+
+The same config also controls the recommendation list, outside the `training`
+object. `top_k` is the number of products returned, and the cutoff for validation
+NDCG/recall and early stopping. Lists shorter than K retain all available items.
+The LambdaRank loss has its own `lambdarank_truncation_level`, commonly K+3.
+
+| Ranking control | Meaning |
+|---|---|
+| `top_k` | List size and evaluation cutoff, default 10 |
+| `reranking.enabled` | Compare the configured policy with relevance-only after fitting |
+| `decay_function_type` | `fixed`, `linear`, or `exponential` relevance-weight mapping |
+| `decay_function_rate` | Positive dimensionless curve rate; larger means less relevance weight at the same history diversity |
+| `alpha_min`, `alpha_max` | Lower/upper relevance-weight bounds; diversity weight is 1-alpha |
+| `fixed_alpha` | Relevance weight when function type is `fixed` |
+| `fallback_alpha` | Relevance weight with insufficient or unmeasurable history |
+| `history_decay_type` | `none`, `linear`, or `exponential` ageing of earlier interactions |
+| `history_decay_rate_per_minute` | Positive age-decay rate; larger means older interactions matter less |
+| `history_max_events` | Shared cap on earlier same-session feature/reranking events |
+| `minimum_history_items` | Minimum distinct usable history items for adaptive weighting |
+| `diversity_metric` | `token`, `category`, or `combined` (equal token/category blend) |
+
+Every row except `top_k` belongs inside the `reranking` object. History decay and
+adaptive weighting are separate operations. Given observed history diversity H,
+linear relevance weight is `min + (max-min)*max(0,1-rate*H)`. Rate 1 reproduces
+the original linear curve. Exponential uses
+`min + (max-min)*(exp(-rate*H)-exp(-rate))/(1-exp(-rate))` with shared endpoints.
+`fixed_alpha` applies only to a fixed policy; the function rate applies to linear
+or exponential policies.
+
+History time weights instead use age in minutes: linear
+`max(0,1-rate*age)` reaches zero after `1/rate` minutes; exponential
+`exp(-rate*age)` has half-life `ln(2)/rate` minutes. A rate of approximately
+0.138629 means a five-minute exponential half-life. History type `none` disables
+age weighting. Undefined history diversity uses `fallback_alpha`.
+
+Decay is applied during reranking, after relevance training. It is not an extra
+term in the LambdaRank loss. Manual validation saves relevance-only and configured
+policy metrics side by side in `reranking_metrics.csv`, individual lists in
+`validation_reranking.parquet`, and prefixed `reranked_*` metrics in the comparison
+CSV. In the curve chart, solid lines are relevance-only and dashed lines show the
+configured policy. Selection and confirmation stay unopened.
+
+`seed` and `threads` are top-level controls. The two lists form a Cartesian grid:
+`num_leaves: [15,31]` and `min_data_in_leaf: [100,300]` test four combinations per
+nominal model. Other settings are scalar and apply to every trial. Gain-sensitivity
+models reuse the best nominal purchase/session leaf settings. Use single-value
+lists if you want to isolate the data-size effect with fixed hyperparameters.
+Using the same grid at every size measures performance after the same tuning
+procedure. Early stopping uses the model's click or graded training objective;
+the fixed primary validation endpoint chooses the best trial.
+
+For a different learning rate or grid, copy the config and set a new output
+folder so the previous results remain comparable:
+
+```powershell
+Copy-Item config/learning_curve.json config/learning_curve_lr003.json
+# Edit learning_rate to 0.03 and output_directory to results/tuning/lr003.
+uv run main.py train --queries 2000 --training-config config/learning_curve_lr003.json
+```
+
+Alternatively, `--curve-root results/tuning/lr003` overrides the output directory.
+Keep one config unchanged while expanding its sizes. K and decay changes also
+require a separate experiment folder. The explicit `pilot-train` command retains the earlier click-only pilot workflow.
+
+Review completed sizes without training anything:
+
+```powershell
+uv run main.py compare
+uv run main.py compare --training-config config/learning_curve_lr003.json
+```
+
+The experiment folder contains `comparison.csv` and `learning_curve.png`.
+Each `queries_2000`, `queries_10000`, etc. folder contains models, audited sample
+counts, `<model>_trials.csv` with every attempted setting and score, matching JSON
+records with the exact shared config, and `learning_metrics.csv`. The console
+shows feature batches, model/trial numbers, iteration scores, best iterations,
+and trial durations. The chart uses validation data, so final scientific claims
+still require a later frozen confirmation study.
+
+## Expanded anonymous-session study
+
+Implementation is ready. The manual learning-curve path above is the entry point
+for gradual training; the expanded command below runs the complete final study. The full-data experiment has
+**not been run**: the preliminary preparation attempt was stopped before model
+training at the user's request. Fresh confirmation outcomes remain unopened.
+
+The commented `expanded_main()` in `main.py` runs the expanded experiment when
+you choose to start it:
+
+```powershell
+uv run main.py expand
+```
+
+It uses every eligible training query, keeps the pilot validation and selection
+queries fixed, and reserves 2,000 fresh confirmation queries in whole daily
+sessions. Exact settings are in `config/expanded_study.json`. Read
+`TRAINING_PLAN.md` for the research protocol and feature/label boundaries.
+
+The run prints its new folder under `results/expanded_study/`. To continue an
+interrupted run, supply that exact folder:
+
+```powershell
+uv run main.py expand-resume --study-run results/expanded_study/<run-folder>
+```
+
+Completed stages are verified by their saved file hashes and reused. Resume
+requires the same scientific source files. Choices are frozen before fresh
+confirmation events are loaded. The original pilot commands and outputs remain
+available.
+
+The stages prepare a SQLite database and batched feature caches; train click and
+purchase-aware LightGBM LambdaRank models; compare fixed, quota, threshold,
+linear and exponential relevance weights; test history time decay separately;
+select and freeze settings; evaluate confirmation; and write a standalone white
+`report.html`. The report embeds its charts and links the discussion to saved
+CSV/Parquet tables, model trials, purchase audits, and session trajectories.
+
+Purchase labels use a unique latest preceding same-session query that contained
+the item. Unmatched and ambiguous purchases stay in the audit. The declared gains
+are 0 (unobserved), 1 (click), and 3 (purchase). Sensitivity fits use purchase
+gains 2 and 5, with common evaluation gains. Purchase-aware NDCG becomes primary
+only with at least 100 purchase-bearing training queries and 20 validation
+queries; otherwise click NDCG remains primary. This rule is saved before scores.
+
+Verification uses Linux/Python 3.11, including a real LightGBM
+synthetic run through reservation, training, selection, freeze, confirmation,
+reporting, and checkpoint reuse. Full-data run outcomes are recorded separately
+inside each run folder. Windows uses the same uv entry point.
