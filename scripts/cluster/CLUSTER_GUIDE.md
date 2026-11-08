@@ -159,8 +159,13 @@ Then record the outcome in EXPERIMENT_LOG.md.
 
 ## Using a GPU
 
-`scripts/cluster/sequence_grid_gpu.sh` runs all 12 settings on one GPU (the
-header uses the NUS `gpu` partition and `--gpus=TYPE:1`). Any GPU type is
+`scripts/cluster/sequence_grid_gpu.sh` runs the 12 settings on one GPU, four at
+a time (`PARALLEL`, default 4; 16 CPU cores, so 4 threads per setting). The
+models are small, and most of each setting's time is CPU work (per-epoch check
+and final scoring), so sharing one GPU this way is about 3–4 times faster than
+one setting after another (that took about 14.5 minutes per setting). Each
+setting logs to `grid_logs/NAME.log`; finished settings are skipped on
+re-submission. The header uses the NUS `gpu` partition and `--gpus=a100-40:1`. Any GPU type is
 enough: the models need well under 2 GB of GPU memory, so a smaller type than
 `h100-96` usually starts sooner (`sinfo -o "%P %G"` lists the types). The models
 train on the GPU automatically when PyTorch can see one (`device` in the config:

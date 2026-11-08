@@ -1095,6 +1095,14 @@ position indices and causal mask were created on the CPU while the model was
 on the GPU. Both are now created on the input's device; a test checks that every
 tensor the model code creates names its device (it fails on the old code). The
 CPU tests cannot run the GPU path itself, so the next cluster run is the check.
+The third GPU job ran correctly (`device: cuda`; first setting's check recall
+peaked at 0.171 against 0.158 for the April-only SASRec; SASRec with 2 blocks
+and dropout 0.5 reached 0.180). Run one after another, each setting took about
+14.5 minutes, mostly CPU work (per-epoch check of 3,000 cases, scoring 20,000
+cases, re-reading the raw CSV), so the 12 settings needed about 3 hours. With
+only one GPU available, `sequence_grid_gpu.sh` now runs four settings at a time
+on that GPU (16 CPU cores, 4 threads each), with one log per setting; the grid
+itself is unchanged.
 
 ---
 
