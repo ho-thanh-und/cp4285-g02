@@ -183,6 +183,10 @@ uv run main.py heldout
 uv run main.py ymal
 # Home page: session two-tower vs item-kNN over the whole catalog, with diversity policies (config/home_page.json).
 uv run main.py home-page
+# Error analysis of the frozen models on the selection results (config/error_analysis.json).
+uv run main.py error-analysis
+# SASRec and GRU4Rec on the home-page cases (config/sequence_models.json).
+uv run main.py sequence-models
 ```
 
 Settings live in `config/alpha_sweep.json`, `config/two_tower.json`,

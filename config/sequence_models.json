@@ -1,0 +1,25 @@
+{
+  "output_directory": "results/sequence_models",
+  "home_config": "config/home_page.json",
+  "home_run": "results/home_page/20261108T095146Z_validation",
+  "models": [
+    "sasrec",
+    "gru4rec"
+  ],
+  "max_length": 20,
+  "embedding_dim": 64,
+  "sasrec_blocks": 2,
+  "sasrec_heads": 2,
+  "dropout": 0.2,
+  "epochs": 20,
+  "batch_size": 128,
+  "learning_rate": 0.001,
+  "negatives": 2000,
+  "popular_negative_share": 0.5,
+  "popular_negative_power": 0.75,
+  "epoch_check_cases": 3000,
+  "bootstrap_replicates": 2000,
+  "seed": 4285,
+  "threads": 4,
+  "embedding_init_std": 0.02
+}

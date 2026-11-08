@@ -1,0 +1,4 @@
+# Cluster job scripts run on Linux: keep Unix line endings even on Windows checkouts.
+*.slurm text eol=lf
+*.pbs text eol=lf
+*.sh text eol=lf

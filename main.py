@@ -178,6 +178,10 @@ def cli(argv=None):
     relevance only, fixed alpha, 6 + 4) on one allowed week, clicks only.
     `uv run main.py home-page` trains the session two-tower and evaluates home page
     recommendations over the whole catalog on one allowed week.
+    `uv run main.py error-analysis` breaks down where the frozen models win and lose
+    on the selection results (config/error_analysis.json).
+    `uv run main.py sequence-models` trains SASRec and GRU4Rec and compares them
+    with the home-page methods on the same cases (config/sequence_models.json).
     `uv run main.py pilot-train` retains the original click-only pilot workflow.
     `uv run main.py diversity --ranker-run results/anonymous_rankers/RUN` reviews ILD.
     `uv run main.py run --ranker-run results/anonymous_rankers/RUN` completes the study.
@@ -188,7 +192,7 @@ def cli(argv=None):
     expanded study settings. --help performs no preparation.
     """
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", nargs="?", choices=["prepare", "train", "pilot-train", "diversity", "run", "resume", "expand", "expand-resume", "compare", "alpha-sweep", "two-tower", "filter-pipeline", "event-ablation", "ranker-phase2", "prepare-data", "item-knn", "heldout", "ymal", "home-page"], default="prepare",
+    parser.add_argument("action", nargs="?", choices=["prepare", "train", "pilot-train", "diversity", "run", "resume", "expand", "expand-resume", "compare", "alpha-sweep", "two-tower", "filter-pipeline", "event-ablation", "ranker-phase2", "prepare-data", "item-knn", "heldout", "ymal", "home-page", "error-analysis", "sequence-models"], default="prepare",
                         help="Prepare, train, review diversity, run remaining stages, or resume a study")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG,
                         help="Sample sizes, date periods, and history limit")
@@ -224,10 +228,24 @@ def cli(argv=None):
                         help="Week, pool sizes and policies for the item page 'You may also like' evaluation")
     parser.add_argument("--home-config", type=Path, default=Path("config/home_page.json"),
                         help="Session two-tower, week and policies for the home page evaluation")
+    parser.add_argument("--errors-config", type=Path, default=Path("config/error_analysis.json"),
+                        help="Selection results to analyse for error-analysis")
+    parser.add_argument("--sequence-config", type=Path, default=Path("config/sequence_models.json"),
+                        help="SASRec / GRU4Rec settings and the home-page run to compare with")
     args = parser.parse_args(argv)
+    if args.action == "sequence-models":
+        os.chdir(Path(__file__).resolve().parent)
+        from session_rerank.sequence_models import run_sequence_models
+        run_sequence_models(args.sequence_config)
+        return
     run_actions = ("alpha-sweep", "two-tower", "filter-pipeline", "event-ablation", "ranker-phase2", "item-knn")
     if (args.action in run_actions) != (args.trained_run is not None):
         parser.error(f"--trained-run is required with {', '.join(run_actions)}, and used only there")
+    if args.action == "error-analysis":
+        os.chdir(Path(__file__).resolve().parent)
+        from session_rerank.error_analysis import run_error_analysis
+        run_error_analysis(args.errors_config)
+        return
     if args.action == "home-page":
         os.chdir(Path(__file__).resolve().parent)
         from session_rerank.home_page import run_home_page
