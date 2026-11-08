@@ -1,0 +1,10 @@
+{
+  "output_directory": "results/event_ablation",
+  "event_variants": ["all_events", "clicks_only", "unexplained_views"],
+  "explained_view_window_seconds": 60,
+  "training_sets": ["all_sessions", "multi_click_sessions"],
+  "minimum_session_clicks": 2,
+  "models": ["click_session", "purchase_session"],
+  "bootstrap_replicates": 2000,
+  "seed": 4285
+}

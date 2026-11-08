@@ -124,12 +124,54 @@ def manual_training_main(config_path=Path("config/learning_curve.json"), queries
     return folder
 
 
+def prepare_data_main(config_path=Path("config/learning_curve.json"), queries=None, curve_root=None):
+    """Prepare one size's data without fitting any model (steps 1-2 of manual training).
+
+    The folder holds the samples, SQLite events and feature cache that the
+    analysis actions (event-ablation, ranker-phase2, two-tower, ...) read. A later
+    `train` with the same --queries and --curve-root resumes from these stages.
+    """
+    if queries is None:
+        raise ValueError("Supply the sample size explicitly: --queries 50000 or all")
+    import json
+    from session_rerank.learning_curve import open_learning_curve_run
+    from session_rerank.expanded_data import prepare_expanded, build_feature_cache
+
+    settings = json.loads(Path(config_path).read_text(encoding="utf-8"))
+    root = Path(curve_root or settings["output_directory"])
+    root.mkdir(parents=True, exist_ok=True)
+    with study_lock(root):
+        config, folder, root = open_learning_curve_run(config_path, queries, root)
+        prepare_expanded(config, folder)
+        build_feature_cache(config, folder)
+    print(f"Data prepared without training: {folder}", flush=True)
+    return folder
+
+
 def cli(argv=None):
     """Read optional preparation settings and start the new pipeline.
 
     `uv run main.py train --queries 2000` trains one learning-curve size.
     `uv run main.py train --queries 2000 --training-config config/learning_curve.json` selects settings.
     `uv run main.py compare` prints completed sizes and redraws the curve.
+    `uv run main.py alpha-sweep --trained-run results/learning_curve/queries_10000`
+    compares session-adaptive alpha with a fixed-alpha curve on validation.
+    `uv run main.py two-tower --trained-run results/learning_curve/queries_10000`
+    trains the rank-weighted two-tower filter and measures recall at each K1.
+    `uv run main.py filter-pipeline --trained-run results/learning_curve/queries_10000
+    --two-tower-run results/two_tower/RUN` filters K1 products, scores them with
+    LightGBM, reranks to a top 10 and reports NDCG@10 and ILD@10.
+    `uv run main.py event-ablation --trained-run results/learning_curve/queries_10000`
+    retrains the session rankers with and without product views, and on all vs
+    multi-click training sessions, then compares them on the same validation.
+    `uv run main.py ranker-phase2 --trained-run results/learning_curve/queries_10000`
+    compares category-page ranker variants (window popularity, position-bias
+    correction, loss, learning rate) with the popularity sort.
+    `uv run main.py prepare-data --queries 50000 --curve-root results/learning_curve_v2`
+    prepares one size's samples and features without fitting any model.
+    `uv run main.py item-knn --trained-run results/learning_curve_v2/queries_50000`
+    ranks category pages with the item-kNN co-click baseline and compares it
+    with the popularity sort and any Phase 2 runs listed in config/item_knn.json.
     `uv run main.py pilot-train` retains the original click-only pilot workflow.
     `uv run main.py diversity --ranker-run results/anonymous_rankers/RUN` reviews ILD.
     `uv run main.py run --ranker-run results/anonymous_rankers/RUN` completes the study.
@@ -140,7 +182,7 @@ def cli(argv=None):
     expanded study settings. --help performs no preparation.
     """
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", nargs="?", choices=["prepare", "train", "pilot-train", "diversity", "run", "resume", "expand", "expand-resume", "compare"], default="prepare",
+    parser.add_argument("action", nargs="?", choices=["prepare", "train", "pilot-train", "diversity", "run", "resume", "expand", "expand-resume", "compare", "alpha-sweep", "two-tower", "filter-pipeline", "event-ablation", "ranker-phase2", "prepare-data", "item-knn"], default="prepare",
                         help="Prepare, train, review diversity, run remaining stages, or resume a study")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG,
                         help="Sample sizes, date periods, and history limit")
@@ -154,11 +196,73 @@ def cli(argv=None):
                         help="Manual training JSON; default config/learning_curve.json with --queries")
     parser.add_argument("--curve-root", type=Path,
                         help="Output directory for this learning curve or tuning experiment")
+    parser.add_argument("--trained-run", type=Path,
+                        help="Learning-curve size folder whose models alpha-sweep reuses")
+    parser.add_argument("--sweep-config", type=Path, default=Path("config/alpha_sweep.json"),
+                        help="Fixed alphas, adaptive betas and bootstrap settings for alpha-sweep")
+    parser.add_argument("--two-tower-config", type=Path, default=Path("config/two_tower.json"),
+                        help="Tower sizes, rank weights, negatives and K1 values for two-tower")
+    parser.add_argument("--two-tower-run", type=Path,
+                        help="Saved two-tower folder that filter-pipeline uses as its K1 filter")
+    parser.add_argument("--pipeline-config", type=Path, default=Path("config/filter_pipeline.json"),
+                        help="K1 values, LightGBM models and rerank policies for filter-pipeline")
+    parser.add_argument("--ablation-config", type=Path, default=Path("config/event_ablation.json"),
+                        help="Event rules, training sets and models for event-ablation")
+    parser.add_argument("--phase2-config", type=Path, default=Path("config/ranker_phase2.json"),
+                        help="Ranker variants, models and data choices for ranker-phase2")
+    parser.add_argument("--knn-config", type=Path, default=Path("config/item_knn.json"),
+                        help="Co-click basket size, shrinkage and runs to compare for item-knn")
     args = parser.parse_args(argv)
-    if args.queries is not None and args.action != "train":
-        parser.error("--queries is used with train")
-    if (args.training_config is not None or args.curve_root is not None) and args.action not in ("train", "compare"):
-        parser.error("--training-config and --curve-root are used with train or compare")
+    run_actions = ("alpha-sweep", "two-tower", "filter-pipeline", "event-ablation", "ranker-phase2", "item-knn")
+    if (args.action in run_actions) != (args.trained_run is not None):
+        parser.error(f"--trained-run is required with {', '.join(run_actions)}, and used only there")
+    if args.action == "item-knn":
+        os.chdir(Path(__file__).resolve().parent)
+        from session_rerank.item_knn import run_item_knn
+        run_item_knn(args.trained_run, args.knn_config)
+        return
+    if args.action == "ranker-phase2":
+        os.chdir(Path(__file__).resolve().parent)
+        from session_rerank.ranker_phase2 import run_phase2
+        run_phase2(args.trained_run, args.phase2_config)
+        return
+    if args.action == "event-ablation":
+        os.chdir(Path(__file__).resolve().parent)
+        from session_rerank.event_ablation import run_event_ablation
+        run_event_ablation(args.trained_run, args.ablation_config)
+        return
+    if (args.action == "filter-pipeline") != (args.two_tower_run is not None):
+        parser.error("--two-tower-run is required with filter-pipeline, and used only there")
+    if args.action == "filter-pipeline":
+        os.chdir(Path(__file__).resolve().parent)
+        from session_rerank.filter_pipeline import run_filter_pipeline
+        run_filter_pipeline(args.trained_run, args.two_tower_run, args.pipeline_config)
+        return
+    if args.action == "alpha-sweep":
+        os.chdir(Path(__file__).resolve().parent)
+        from session_rerank.alpha_sweep import run_alpha_sweep
+        run_alpha_sweep(args.trained_run, args.sweep_config)
+        return
+    if args.action == "two-tower":
+        os.chdir(Path(__file__).resolve().parent)
+        from session_rerank.two_tower import train_two_tower
+        train_two_tower(args.trained_run, args.two_tower_config)
+        return
+    if args.queries is not None and args.action not in ("train", "prepare-data"):
+        parser.error("--queries is used with train or prepare-data")
+    if (args.training_config is not None or args.curve_root is not None) and args.action not in ("train", "compare", "prepare-data"):
+        parser.error("--training-config and --curve-root are used with train, prepare-data or compare")
+    if args.action == "prepare-data":
+        if args.queries is None:
+            parser.error("prepare-data requires --queries (for example: prepare-data --queries 50000)")
+        from session_rerank.learning_curve import query_target
+        try:
+            query_target(args.queries)
+        except ValueError as error:
+            parser.error(str(error))
+        os.chdir(Path(__file__).resolve().parent)
+        prepare_data_main(args.training_config or Path("config/learning_curve.json"), args.queries, args.curve_root)
+        return
     manual = args.action == "train"
     if manual and args.queries is None:
         parser.error("train requires --queries (for example: train --queries 2000)")

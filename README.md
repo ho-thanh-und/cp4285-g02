@@ -156,6 +156,40 @@ frozen choices intact. A lock prevents concurrent writers in one study folder.
 After a process crash, remove its stale `running.lock` only after verifying
 that its process has stopped.
 
+## Analysis tools added in November 2026
+
+Results, decisions and the phase plan are in [EXPERIMENT_LOG.md](EXPERIMENT_LOG.md).
+Each tool reuses a learning-curve run folder and evaluates on validation only.
+
+```powershell
+# Fixed-alpha trade-off curve versus session-adaptive alpha, with a shuffle control.
+uv run main.py alpha-sweep --trained-run results/learning_curve/queries_10000
+# Rank-weighted two-tower filter (product name, category, price, popularity).
+uv run main.py two-tower --trained-run results/learning_curve/queries_10000
+# Filter K1 products -> LightGBM scores -> rerank -> NDCG@10 and ILD@10.
+uv run main.py filter-pipeline --trained-run results/learning_curve/queries_10000 --two-tower-run results/two_tower/RUN
+# Phase 1: retrain rankers with/without product views and on all vs multi-click sessions.
+uv run main.py event-ablation --trained-run results/learning_curve/queries_10000
+# Phase 2: category-page ranker variants (window popularity, position correction, loss, learning rate).
+uv run main.py ranker-phase2 --trained-run results/learning_curve/queries_10000
+# Prepare a larger size's data without fitting models, then run Phase 2 on it.
+uv run main.py prepare-data --queries 50000 --curve-root results/learning_curve_v2
+uv run main.py ranker-phase2 --trained-run results/learning_curve_v2/queries_50000 --phase2-config config/ranker_phase2_50k.json
+# Classical CF baseline (item-kNN on session co-clicks), compared with the runs in config/item_knn.json.
+uv run main.py item-knn --trained-run results/learning_curve_v2/queries_50000
+```
+
+Settings live in `config/alpha_sweep.json`, `config/two_tower.json`,
+`config/filter_pipeline.json`, `config/event_ablation.json`,
+`config/ranker_phase2.json`, `config/ranker_phase2_50k.json`,
+`config/ranker_lead_50k.json` and `config/item_knn.json`. Rankers report
+click NDCG@10, Recall@10 and MRR@10. Dataset analyses
+used for the log are in `scripts/analysis/`.
+
+On native Windows, LightGBM training crashes when pandas is imported first.
+`session_rerank/__init__.py` and `tests/conftest.py` import LightGBM first; keep
+that order in new scripts.
+
 ## Earlier benchmark for reference
 
 The earlier complete experiment is kept in

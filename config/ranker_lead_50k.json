@@ -1,0 +1,13 @@
+{
+  "output_directory": "results/ranker_phase2",
+  "event_variant": "clicks_only",
+  "exclude_text_search_from_training": true,
+  "raw_directory": "data/raw",
+  "position_bucket_edges": [1, 2, 3, 4, 5, 6, 11, 21, 51, 101],
+  "models": ["click_session", "purchase_session"],
+  "variants": [
+    {"id": "popularity_xendcg", "popularity": true, "position_debias": false, "objective": "rank_xendcg", "learning_rate": 0.05}
+  ],
+  "bootstrap_replicates": 2000,
+  "seed": 4285
+}

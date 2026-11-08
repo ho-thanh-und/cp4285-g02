@@ -1,0 +1,14 @@
+{
+  "output_directory": "results/filter_pipeline",
+  "top_k": 10,
+  "k1_values": [50, 100, 200],
+  "models": ["purchase_session", "click_session"],
+  "policies": [
+    {"id": "relevance", "family": "relevance"},
+    {"id": "fixed_0.8", "family": "fixed", "weight": 0.8},
+    {"id": "exponential_1", "family": "exponential", "beta": 1.0, "alpha_min": 0.2, "alpha_max": 1.0, "default_weight": 0.8},
+    {"id": "six_four", "family": "diverse_tail", "keep": 6}
+  ],
+  "bootstrap_replicates": 2000,
+  "seed": 4285
+}

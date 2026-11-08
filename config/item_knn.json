@@ -1,0 +1,24 @@
+{
+  "output_directory": "results/item_knn",
+  "raw_directory": "data/raw",
+  "max_items_per_session": 50,
+  "shrinkage": 0,
+  "compare_with": [
+    {
+      "label": "lightgbm_xendcg_click",
+      "per_query": "results/ranker_phase2/20261108T081226Z_queries_50000/validation_per_query.parquet",
+      "variant": "popularity_xendcg",
+      "model": "click_session",
+      "statistic": "grid_mean"
+    },
+    {
+      "label": "lightgbm_xendcg_purchase",
+      "per_query": "results/ranker_phase2/20261108T081226Z_queries_50000/validation_per_query.parquet",
+      "variant": "popularity_xendcg",
+      "model": "purchase_session",
+      "statistic": "grid_mean"
+    }
+  ],
+  "bootstrap_replicates": 2000,
+  "seed": 4285
+}

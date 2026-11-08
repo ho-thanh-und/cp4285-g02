@@ -185,6 +185,15 @@ For the nominal 10,000-query `purchase_session` model, relevance-only click NDCG
 
 ![Exponential rates, 10,000-query models](results/exponential_decay_10000/20261107T091326Z/all_models_exponential_rates.png)
 
+## Update, 8 November 2026
+
+Later work is recorded in [EXPERIMENT_LOG.md](EXPERIMENT_LOG.md): dataset facts
+(95% of queries are category pages, session lengths, clicks versus views), a
+fixed-alpha versus adaptive-alpha comparison, a rank-weighted two-tower filter,
+the filter → LightGBM → rerank pipeline, and the Phase 1 decisions (ranker
+features use clicks only; train on all sessions). The sections below describe
+the state on 7 November.
+
 ## What is complete and what comes next
 
 **Complete:** anonymous session preprocessing; candidate, interaction and purchase audits; LightGBM ranking variants and gain sensitivity; manual learning curves for 2,000 and 10,000 queries; fixed 6 + 4 and exponential reranking evaluations on validation; CSVs and graphs.
