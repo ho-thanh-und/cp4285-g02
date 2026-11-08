@@ -172,6 +172,8 @@ def cli(argv=None):
     `uv run main.py item-knn --trained-run results/learning_curve_v2/queries_50000`
     ranks category pages with the item-kNN co-click baseline and compares it
     with the popularity sort and any Phase 2 runs listed in config/item_knn.json.
+    `uv run main.py heldout` freezes the category-page choices, retrains the frozen
+    rankers and evaluates every method on the reserved selection queries.
     `uv run main.py pilot-train` retains the original click-only pilot workflow.
     `uv run main.py diversity --ranker-run results/anonymous_rankers/RUN` reviews ILD.
     `uv run main.py run --ranker-run results/anonymous_rankers/RUN` completes the study.
@@ -182,7 +184,7 @@ def cli(argv=None):
     expanded study settings. --help performs no preparation.
     """
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", nargs="?", choices=["prepare", "train", "pilot-train", "diversity", "run", "resume", "expand", "expand-resume", "compare", "alpha-sweep", "two-tower", "filter-pipeline", "event-ablation", "ranker-phase2", "prepare-data", "item-knn"], default="prepare",
+    parser.add_argument("action", nargs="?", choices=["prepare", "train", "pilot-train", "diversity", "run", "resume", "expand", "expand-resume", "compare", "alpha-sweep", "two-tower", "filter-pipeline", "event-ablation", "ranker-phase2", "prepare-data", "item-knn", "heldout"], default="prepare",
                         help="Prepare, train, review diversity, run remaining stages, or resume a study")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG,
                         help="Sample sizes, date periods, and history limit")
@@ -212,10 +214,17 @@ def cli(argv=None):
                         help="Ranker variants, models and data choices for ranker-phase2")
     parser.add_argument("--knn-config", type=Path, default=Path("config/item_knn.json"),
                         help="Co-click basket size, shrinkage and runs to compare for item-knn")
+    parser.add_argument("--heldout-config", type=Path, default=Path("config/heldout.json"),
+                        help="Frozen runs and the held-out split for heldout (selection only for now)")
     args = parser.parse_args(argv)
     run_actions = ("alpha-sweep", "two-tower", "filter-pipeline", "event-ablation", "ranker-phase2", "item-knn")
     if (args.action in run_actions) != (args.trained_run is not None):
         parser.error(f"--trained-run is required with {', '.join(run_actions)}, and used only there")
+    if args.action == "heldout":
+        os.chdir(Path(__file__).resolve().parent)
+        from session_rerank.heldout import run_heldout
+        run_heldout(args.heldout_config)
+        return
     if args.action == "item-knn":
         os.chdir(Path(__file__).resolve().parent)
         from session_rerank.item_knn import run_item_knn

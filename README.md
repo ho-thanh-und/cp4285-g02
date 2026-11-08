@@ -177,12 +177,15 @@ uv run main.py prepare-data --queries 50000 --curve-root results/learning_curve_
 uv run main.py ranker-phase2 --trained-run results/learning_curve_v2/queries_50000 --phase2-config config/ranker_phase2_50k.json
 # Classical CF baseline (item-kNN on session co-clicks), compared with the runs in config/item_knn.json.
 uv run main.py item-knn --trained-run results/learning_curve_v2/queries_50000
+# Phase 5 for category pages: freeze choices, retrain the frozen rankers, evaluate on the selection split.
+uv run main.py heldout
 ```
 
 Settings live in `config/alpha_sweep.json`, `config/two_tower.json`,
 `config/filter_pipeline.json`, `config/event_ablation.json`,
 `config/ranker_phase2.json`, `config/ranker_phase2_50k.json`,
-`config/ranker_lead_50k.json` and `config/item_knn.json`. Rankers report
+`config/ranker_lead_50k.json`, `config/item_knn.json` and `config/heldout.json`.
+The confirmation split stays sealed: `heldout` refuses to open it. Rankers report
 click NDCG@10, Recall@10 and MRR@10. Dataset analyses
 used for the log are in `scripts/analysis/`.
 

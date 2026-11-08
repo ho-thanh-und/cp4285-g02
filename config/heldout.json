@@ -1,0 +1,10 @@
+{
+  "output_directory": "results/heldout",
+  "split": "selection",
+  "trained_run": "results/learning_curve_v2/queries_50000",
+  "phase2_run": "results/ranker_phase2/20261108T081226Z_queries_50000",
+  "phase2_config": "config/ranker_lead_50k.json",
+  "knn_config": "config/item_knn.json",
+  "bootstrap_replicates": 2000,
+  "seed": 4285
+}

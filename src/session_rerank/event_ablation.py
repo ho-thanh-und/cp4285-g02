@@ -209,6 +209,20 @@ def per_query_metrics(validation, prediction, label_gains, k):
     return pd.DataFrame(rows)
 
 
+def ranker_params(rank_objective, fit_gains, settings, leaves, minimum, seed, threads):
+    """The single LightGBM parameter set used by grid search and by frozen retraining."""
+    return dict(
+        objective=rank_objective, metric="None", label_gain=fit_gains,
+        learning_rate=settings["learning_rate"], num_leaves=leaves, min_data_in_leaf=minimum,
+        max_depth=settings["max_depth"], max_bin=settings["max_bin"],
+        lambda_l1=settings["lambda_l1"], lambda_l2=settings["lambda_l2"],
+        feature_fraction=settings["feature_fraction"], bagging_fraction=settings["bagging_fraction"],
+        bagging_freq=settings["bagging_freq"], lambdarank_truncation_level=settings["lambdarank_truncation_level"],
+        feature_pre_filter=False, deterministic=True, force_col_wise=True, seed=seed,
+        num_threads=threads, verbosity=-1,
+    )
+
+
 def fit_grid(name, objective, feature_indices, train_matrix, valid_matrix, inputs, settings, query_mask, k,
              *, rank_objective="lambdarank", train_positions=None, feature_names=None, valid_query_mask=None):
     """Fit every grid setting; return per-query validation metrics for each trial.
@@ -245,16 +259,8 @@ def fit_grid(name, objective, feature_indices, train_matrix, valid_matrix, input
 
     results = []
     for leaves, minimum in product(settings["num_leaves"], settings["min_data_in_leaf"]):
-        model = lgb.train(dict(
-            objective=rank_objective, metric="None", label_gain=fit_gains,
-            learning_rate=settings["learning_rate"], num_leaves=leaves, min_data_in_leaf=minimum,
-            max_depth=settings["max_depth"], max_bin=settings["max_bin"],
-            lambda_l1=settings["lambda_l1"], lambda_l2=settings["lambda_l2"],
-            feature_fraction=settings["feature_fraction"], bagging_fraction=settings["bagging_fraction"],
-            bagging_freq=settings["bagging_freq"], lambdarank_truncation_level=settings["lambdarank_truncation_level"],
-            feature_pre_filter=False, deterministic=True, force_col_wise=True, seed=seed,
-            num_threads=threads, verbosity=-1,
-        ), train, num_boost_round=settings["num_boost_round"], valid_sets=[valid], feval=custom_metric,
+        model = lgb.train(ranker_params(rank_objective, fit_gains, settings, leaves, minimum, seed, threads),
+                          train, num_boost_round=settings["num_boost_round"], valid_sets=[valid], feval=custom_metric,
             callbacks=[lgb.early_stopping(settings["early_stopping_rounds"], verbose=False)])
         prediction = model.predict(valid_matrix[:, feature_indices], num_threads=threads)
         measured = per_query_metrics(validation, prediction, config["label_gains"], k)

@@ -111,6 +111,13 @@ class KnnData:
         self.validation_queries = queries[queries.split.eq("validation")].set_index("query_id")
         self.validation_clicks = events
 
+    def use_queries(self, queries, clicks):
+        """Score another split: queries indexed by query_id (session_key, timeframe,
+        category) and that split's click events (session_key, timeframe, item_id,
+        query_id). The similarity and popularity stay those of the training window."""
+        self.validation_queries = queries
+        self.validation_clicks = clicks
+
     def history(self, query_id):
         """Distinct products clicked earlier in the query's session (catalog rows)."""
         query = self.validation_queries.loc[query_id]

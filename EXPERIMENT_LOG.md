@@ -20,6 +20,7 @@ Contents
    - [6a. Experiment E (Phase 2, step 1): category-page ranker](#6a-experiment-e-phase-2-step-1-category-page-ranker)
    - [6b. Experiment F (Phase 2, step 2): scaling to 50,000 training queries](#6b-experiment-f-phase-2-step-2-scaling-to-50000-training-queries)
    - [6c. Experiment G: classical baseline (item-kNN) and MRR](#6c-experiment-g-classical-baseline-item-knn-and-mrr)
+   - [6d. Experiment H (Phase 5, category pages): held-out selection set](#6d-experiment-h-phase-5-category-pages-held-out-selection-set)
 7. [Decisions](#7-decisions)
 8. [Plan and status](#8-plan-and-status)
 9. [Known issues and caveats](#9-known-issues-and-caveats)
@@ -39,7 +40,7 @@ which is why this did not show up before.
 - `src/session_rerank/__init__.py` now imports LightGBM first, so any script
   that imports `session_rerank` before pandas is safe.
 - `tests/conftest.py` does the same for the test suite.
-- Test suite on Windows: **156 of 158 pass** (as of §6c; 141 of 143 when
+- Test suite on Windows: **158 of 160 pass** (as of §6d; 141 of 143 when
   first fixed). The 2 failures
   (`test_anonymous_study.py`, `test_expanded_study.py`, older study pipelines)
   fail while writing a temporary file at the end of a ~250-character path;
@@ -57,6 +58,7 @@ which is why this did not show up before.
 | `ranker_phase2.py` | `ranker-phase2` | `config/ranker_phase2.json`, `config/ranker_phase2_50k.json` | `tests/test_ranker_phase2.py` |
 | `main.py` (`prepare_data_main`) | `prepare-data` | `config/learning_curve.json` | `tests/test_ranker_phase2.py` |
 | `item_knn.py` | `item-knn` | `config/item_knn.json` (its `compare_with` lists the Phase 2 runs to join) | `tests/test_item_knn.py` |
+| `heldout.py` | `heldout` | `config/heldout.json` | `tests/test_heldout.py` |
 
 **Analysis scripts** moved into the repository: `scripts/analysis/session_lengths.py`
 and `scripts/analysis/click_view.py`. Other dataset facts below were measured
@@ -547,11 +549,76 @@ Differences (session bootstrap, 95% intervals), category pages:
 - Without history all methods except the site's order tie (differences within
   ±0.005).
 
-**Conclusion.** The learned ranker beats both the non-personalised baseline and
+**Conclusion (6c).** The learned ranker beats both the non-personalised baseline and
 the classical CF baseline on all three metrics, and the advantage sits in
 sessions with history. Co-click CF alone is a weak personaliser here (most
 sessions are short and one-category), but it is the natural model for the item
 page.
+
+---
+
+## 6d. Experiment H (Phase 5, category pages): held-out selection set
+
+`results/heldout/20261108T082748Z_selection/` — `uv run main.py heldout` (`config/heldout.json`)
+
+**First held-out result.** These 1,000 selection queries (May 9–14, 614
+sessions, 996 with a click, 962 category pages, 152,880 candidates) were never
+used for any choice before this run.
+
+**Procedure** (`heldout.py`), each step completed before the next:
+
+1. **Freeze** (`frozen_choices.json`), written before any selection data was
+   read: clicks-only features, all sessions, no text searches in training;
+   lead ranker `popularity_xendcg` trained on 50k queries with each model's
+   validation-selected setting (`click_session`: 31 leaves, min rows 100, 47
+   trees; `purchase_session`: 15 leaves, min rows 100, 74 trees); item-kNN as
+   in §6c; metrics NDCG@10, Recall@10, MRR@10; declared rule: choose the
+   LightGBM model with the higher selection category-page click NDCG@10, ties to
+   `click_session`. Recorded code state: commit `75367ca` plus uncommitted
+   changes (the held-out module itself, committed afterwards).
+2. **Retrain** the frozen models with that setting and tree count. Check
+   passed: on validation they reproduce the Phase 2 per-query scores exactly.
+3. **Rebuild the selection split** with the pipeline's sampling and database
+   code. Check passed: query IDs equal the pilot's reserved selection IDs.
+4. **Features and labels** as for validation; similarity and popularity from
+   the April training window only.
+5. **Confirmation stays sealed**: the code refuses to open it until the home
+   page and "You may also like" choices are frozen.
+
+**Results on selection, category pages (962 queries):**
+
+| Method | NDCG@10 | Recall@10 | MRR@10 | NDCG with history (356) | NDCG no history (606) |
+|---|---:|---:|---:|---:|---:|
+| Site's original order | 0.065 | 0.118 | 0.056 | 0.063 | 0.067 |
+| Popularity sort | 0.174 | 0.283 | 0.161 | 0.160 | 0.183 |
+| Item-kNN (co-click CF) | 0.176 | 0.291 | 0.159 | 0.163 | 0.183 |
+| LightGBM `click_session` | 0.203 | 0.322 | **0.186** | 0.223 | **0.192** |
+| **LightGBM `purchase_session`** (chosen) | **0.204** | **0.326** | 0.185 | **0.229** | 0.189 |
+
+Differences (session bootstrap, 95% intervals):
+
+- **LightGBM vs popularity sort:** `purchase_session` NDCG +0.029 (+0.017,
+  +0.043), recall +0.043 (+0.025, +0.062), MRR +0.024 (+0.011, +0.037). With
+  history NDCG +0.069 (+0.040, +0.101). `click_session` is the same within
+  0.005.
+- **LightGBM vs item-kNN:** NDCG +0.028 (+0.014, +0.041), recall +0.035
+  (+0.015, +0.055), MRR +0.027 (+0.013, +0.041).
+- **Item-kNN vs popularity sort:** NDCG +0.001 (−0.008, +0.011); no measurable
+  gain.
+- **Without history** LightGBM is now slightly ahead of the popularity sort
+  (`click_session` NDCG +0.009, +0.001 to +0.016), where validation showed a
+  tie.
+
+**Choice by the declared rule:** `purchase_session` 0.20346 vs `click_session`
+0.20336 category-page NDCG, a difference of 0.0001 — effectively a tie that the
+rule resolves to `purchase_session` (`selection_choice.json`).
+
+**Reading.** Every validation conclusion held on untouched data: the learned
+ranker beats both baselines on all three metrics with intervals above zero,
+item-kNN adds nothing measurable over popularity, and the gain sits in sessions
+with history. Absolute scores are lower than on validation (0.20 vs 0.23),
+which reflects a different week of traffic, so only same-query comparisons
+should be read.
 
 ---
 
@@ -560,6 +627,7 @@ page.
 | Date | Decision | Evidence |
 |---|---|---|
 | 2026-11-08 | **Category-page ranker adds window popularity features; lead candidate is `rank_xendcg` with those features.** Position correction and learning rate 0.02 are not adopted for now. | §6a: popularity +0.03 (intervals above zero); xendcg is the only variant ahead of the popularity sort in every model/statistic. To be confirmed on selection data (Phase 5). |
+| 2026-11-08 | **Category-page choices frozen; `purchase_session` (popularity + xendcg, 50k) is the category-page ranker.** | §6d: frozen before the selection split was read; selection confirms LightGBM over both baselines; the declared rule picks `purchase_session` by 0.0001 NDCG (a practical tie). |
 | 2026-11-08 | **Item-kNN on session co-clicks is the classical CF baseline** (and the planned "You may also like" model); MRR@10 is reported with NDCG@10 and Recall@10. | §6c: LightGBM beats item-kNN by +0.025 NDCG (interval above zero); item-kNN beats popularity only in direction. |
 | 2026-11-08 | **Train the category-page ranker on 50,000 queries** (data folder `results/learning_curve_v2/queries_50000`); keep `popularity_xendcg` as the lead. Position correction is dropped. | §6b: 50k adds +0.008 to +0.021 over 10k; at 50k all variants beat the popularity sort by about +0.03 and differ from each other by less than 0.01. All-data training does not fit in the free memory yet. |
 | 2026-11-08 | **Final product: a recommendation website** with a home page, category pages and an item page with "You may also like" (user decision; §8.1). | Product goal set by the team. |
@@ -583,12 +651,12 @@ page.
 
 | Phase | Content | Status |
 |---|---|---|
-| 0 | Windows training fix; commit current work; data-only "prepare all" step | **Done.** Windows fix; `prepare-data` (§6b). Committed 2026-11-08 on branch `refactor/readable-main-pipeline` in two commits: `a9b9a5d` (the earlier K1-filter edits and the team handover) and the commit after it (all work in this log). Not pushed |
+| 0 | Windows training fix; commit current work; data-only "prepare all" step | **Done.** Windows fix; `prepare-data` (§6b). Committed 2026-11-08 on branch `refactor/readable-main-pipeline` in two commits: `a9b9a5d` (the earlier K1-filter edits and the team handover) and `75367ca` (all work in this log); both pushed to `origin` the same day |
 | 1 | Views ablation; multi-click training filter | **Done** (§6, §7) |
 | 2 | Relevance model: full-April popularity in LightGBM; position debias (LightGBM `position`); `lambdarank` vs `rank_xendcg`; RankNet MLP check; optional GRU4Rec feature; lower learning rate; scale to 50k and all queries | **Steps 1–2 done** (§6a: popularity, position, xendcg, learning rate; §6b: 50k queries). Left: all-data training (needs less memory per row or a larger machine); RankNet MLP check; optional GRU4Rec feature |
 | 3 | Filter: retrain two-tower on all data; compare with popularity filter using the Phase 2 ranker; choose K1 and whether never-shown products are allowed | Pending |
 | 4 | Diversity: fixed-alpha curve vs adaptive policies (session variety, query position, category switch); declared rule: most ILD within 5% NDCG loss | Pending |
-| 5 | Choose on selection, freeze, evaluate confirmation; session-bootstrap intervals by segment | Pending |
+| 5 | Choose on selection, freeze, evaluate confirmation; session-bootstrap intervals by segment | **Category pages: frozen and evaluated on selection** (§6d). Confirmation sealed until the home page and "You may also like" are frozen |
 
 ### 8.0 Course requirements checklist (assessed 2026-11-08)
 
@@ -597,12 +665,12 @@ page.
 | Well-defined user problem and objective | Research question (§3 of the handover), product brief (§8.1), per-page metrics | One consolidated statement for the report. The original "adaptive diversity" hypothesis was not supported (§3, §2), so the objective should read as relevance with controlled variety, with adaptation as a tested-and-rejected idea | Writing |
 | At least one classical baseline (CF, MF) | **Done 2026-11-08 (§6c): item-kNN on session co-clicks**, plus popularity sort and the site's order | Originally: no collaborative-filtering model under the current protocol. The older pipeline's session co-occurrence graph and GRU4Rec/SASRec used persistent-user features and another protocol. Needed: item-kNN on session co-clicks (also the "You may also like" model). MF needs a learned vector per user or session, which new anonymous sessions do not have; its item factors can still be used item-to-item | Build |
 | At least one neural or advanced model | Two-tower (neural, rank-weighted loss); LightGBM LambdaMART/xendcg (advanced) | Re-evaluate the two-tower under the final data choices (clicks only, 50k) in the same table as the other models | Small |
-| Rigorous offline evaluation (NDCG, Recall@K, MRR) | NDCG@10, Recall@10, **MRR@10 (added 2026-11-08, §6c)**, recall at K1, ILD, session-bootstrap intervals, segments; one table of site order, popularity, item-kNN and LightGBM on identical queries (§6c) | **Everything is validation-only:** selection and confirmation (Phase 5) are needed for a held-out result. No single table compares every model under one protocol | Build |
+| Rigorous offline evaluation (NDCG, Recall@K, MRR) | NDCG@10, Recall@10, **MRR@10 (added 2026-11-08, §6c)**, recall at K1, ILD, session-bootstrap intervals, segments; one table of site order, popularity, item-kNN and LightGBM on identical queries (§6c); **held-out selection table for category pages (§6d, 2026-11-08)** | Confirmation (final held-out test) still sealed until the other pages are frozen. Originally: **everything was validation-only:** selection and confirmation (Phase 5) are needed for a held-out result. No single table compares every model under one protocol | Build |
 | Error analysis of failure modes | Scattered findings: cold queries tie popularity, text search fails, never-shown products unjudgeable, token ILD ceiling, hyperparameter sensitivity, category ID dominates splits | A systematic analysis of the final model: where it loses to popularity (categories, deep-ranked clicks, unpopular or new products, session length), with example lists | Build + writing |
 | Ethical analysis | Anonymous design (no user IDs); notes on position bias and click-only selection effect | Not written. Topics with measurable parts: popularity bias and exposure concentration (coverage, Gini of recommended products), position bias in logged clicks, privacy of the website's interaction logging, stakeholder impact (long-tail sellers, shoppers), AI-generated demo names | Measurement + writing |
 
 Proposed order: (1) item-kNN baseline and MRR (**done**, §6c), (2) one comparison table on held-out
-data (Phase 5), (3) error analysis, (4) ethics with exposure measurements,
+data (Phase 5; **selection done for category pages**, §6d), (3) error analysis, (4) ethics with exposure measurements,
 (5) the written problem statement.
 
 ### 8.1 Product surfaces (user brief, 2026-11-08; open points 1–4 resolved)
@@ -667,6 +735,7 @@ uv run main.py prepare-data --queries 50000 --curve-root results/learning_curve_
 uv run main.py ranker-phase2 --trained-run results/learning_curve_v2/queries_50000 --phase2-config config/ranker_phase2_50k.json
 uv run main.py ranker-phase2 --trained-run results/learning_curve_v2/queries_50000 --phase2-config config/ranker_lead_50k.json
 uv run main.py item-knn --trained-run results/learning_curve_v2/queries_50000
+uv run main.py heldout
 uv run python scripts/analysis/session_lengths.py data/raw OUTPUT_FOLDER
 uv run python scripts/analysis/click_view.py data/raw
 ```
@@ -686,3 +755,6 @@ uv run python scripts/analysis/click_view.py data/raw
 | `ranker_phase2/…/validation_per_query.parquet` | Per-query NDCG (and MRR from §6c on) for every variant and reference, with query type and history flag |
 | `item_knn/…/summary.csv`, `differences.csv` | NDCG/Recall/MRR of every method by segment; differences vs popularity sort and vs item-kNN |
 | `item_knn/…/knn_settings.json` | Basket, similarity and coverage statistics |
+| `heldout/…/frozen_choices.json`, `selection_choice.json` | Choices frozen before opening the split; the declared rule's outcome |
+| `heldout/…/summary.csv`, `differences.csv`, `selection_per_query.parquet` | Held-out NDCG/Recall/MRR by method and segment, with intervals |
+| `heldout/…/click_session.txt`, `purchase_session.txt`, `selection.sqlite` | Frozen models and the rebuilt selection split |

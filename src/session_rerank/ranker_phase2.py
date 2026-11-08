@@ -104,6 +104,8 @@ class Phase2Data:
         clicks, purchases = window_activity(settings["raw_directory"], item_index, start, days)
         rates = np.ascontiguousarray(popularity_features(clicks, purchases)[..., :2])
         del clicks, purchases
+        # Kept so later splits (held-out evaluation) get identical popularity columns.
+        self.rates, self.item_index, self.days = rates, item_index, days
         self.matrices, self.meta, self.query_type, self.ranks = {}, {}, {}, {}
         for split, (matrix, items) in matrices.items():
             queries = self.inputs.queries[split]
