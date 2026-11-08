@@ -21,6 +21,8 @@ def learning_config(raw_experiment):
     config = json.loads((Path(__file__).parents[1] / 'config/learning_curve.json').read_text())
     config.update(pilot_directory=str(pilot), output_directory=str(protocol.parent / 'curve'),
                   query_batch_size=2, purchase_gain_sensitivity=[], validation_only=True, top_k=2)
+    config['reranking']['relevance_slots'] = 1
+    config['reranking']['k1'] = 2
     config['training'].update(num_leaves=[3], min_data_in_leaf=[1], num_boost_round=3,
                               early_stopping_rounds=2, log_evaluation_period=1,
                               max_bin=31, learning_rate=.125, lambda_l2=.5)
@@ -85,7 +87,13 @@ def test_manual_training_compares_sizes_resumes_and_forwards_json_settings(learn
     assert measured.top_k.eq(2).all()
     assert measured.topk_item_ids.map(lambda value: len(json.loads(value))).eq(2).all()
     assert set(measured.policy_id) == {'relevance', 'configured'}
-    assert measured[measured.policy_id.eq('configured')].alpha.between(.2, 1.).all()
+    assert measured[measured.policy_id.eq('configured')].candidate_pool_size.eq(2).all()
+    assert measured[measured.policy_id.eq('relevance')].candidate_pool_size.eq(3).all()
+    assert measured[measured.policy_id.eq('configured')].alpha.isna().all()
+    assert {'head_click_ndcg', 'head_gain_ndcg', 'tail_diversity_ild'} <= set(measured.columns)
+    for _, group in measured.groupby(['model', 'query_id']):
+        lists = group.set_index('policy_id').topk_item_ids.map(json.loads)
+        assert lists['relevance'][:1] == lists['configured'][:1]
     comparison = pd.read_csv(Path(config['output_directory']) / 'comparison.csv')
     assert comparison.training_queries.nunique() == 2
     assert comparison.top_k.eq(2).all()

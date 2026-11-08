@@ -68,6 +68,20 @@ The pilot supplies tested code and a comparison baseline. Train the expanded
 models from scratch on all eligible training sessions, including the pilot
 sessions. The user will run the learning curve manually, one size at a time.
 
+## Six-plus-four policy
+
+The configured manual policy now first retains the top K1 candidates by
+relevance (default 500), then keeps the six highest-relevance candidates and
+chooses four mutually diverse candidates from the remaining K1 pool. The four are
+ordered by relevance. Pair seeding and greedy additions approximate maximum
+mutual ILD; they do not solve the combinatorial objective exactly. Report
+relevance at six, diversity within the final four, and whole-list measures.
+This fixed quota does not change with session history; adaptive quotas would
+require a separate policy and experiment. K1 filters the already logged and scored query list, not the full catalog.
+Earlier 6 + 4 validation results were produced before this filter and remain
+historical unfiltered results. The K1-filtered policy has not yet been evaluated
+on real data.
+
 ## Manual training and tuning controls
 
 See [TRAINING_CONFIG_GUIDE.md](TRAINING_CONFIG_GUIDE.md) for the runnable commands,

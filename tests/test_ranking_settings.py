@@ -81,3 +81,50 @@ def test_missing_metadata_does_not_satisfy_minimum_usable_history():
     result = weighted_history_context(queries, history, catalog, minimum_items=3).iloc[0]
     assert result.history_unique_items == 3 and result.history_usable_items == 2
     assert np.isnan(result.history_ild)
+
+
+def test_diverse_tail_keeps_relevance_head_and_sorts_tail_by_relevance():
+    scores = np.arange(10., 0., -1)
+    d = np.zeros((10, 10))
+    for i, j, distance in [(6,7,.8),(6,8,.9),(6,9,.1),(7,8,.9),(7,9,.2),(8,9,.9)]:
+        d[i,j] = d[j,i] = distance
+    policy = configured_policy({'top_k':10, 'reranking':{'policy_type':'diverse_tail','relevance_slots':6}})
+    chosen = expanded_order(scores, d, policy, np.nan, 10)
+    assert chosen.tolist() == list(range(10))
+    assert np.isnan(relevance_weight(policy, np.nan))
+
+
+def test_diverse_tail_selects_mutual_diversity_not_distance_from_head():
+    scores = np.arange(9., 0., -1)
+    d = np.zeros((9,9))
+    d[6,8] = d[8,6] = 1
+    d[7,8] = d[8,7] = .9
+    d[6,7] = d[7,6] = .1
+    policy = {'family':'diverse_tail','keep':6}
+    assert expanded_order(scores, d, policy, 0, k=8).tolist() == [0,1,2,3,4,5,6,8]
+    assert expanded_order(scores[:5], d[:5,:5], policy, 0, k=10).tolist() == [0,1,2,3,4]
+    with pytest.raises(ValueError, match='relevance_slots'):
+        reranking_settings({'top_k': 5, 'reranking': {'policy_type':'diverse_tail','relevance_slots':6}})
+
+
+def test_k1_excludes_diverse_but_low_relevance_candidates():
+    scores = np.arange(12., 0., -1)
+    distances = np.zeros((12, 12))
+    # The last product is most different but falls outside the top-10 pool.
+    distances[10:, :] = 1
+    distances[:, 10:] = 1
+    policy = configured_policy({'top_k': 8, 'reranking': {
+        'policy_type': 'diverse_tail', 'relevance_slots': 6, 'k1': 10}})
+    order = expanded_order(scores, distances, policy, np.nan, 8)
+    assert order[:6].tolist() == list(range(6))
+    assert set(order[6:]).issubset({6, 7, 8, 9})
+    assert not set(order) & {10, 11}
+    # The actual pool can be smaller than K1, including smaller than K.
+    short = expanded_order(scores[:5], distances[:5, :5], policy, np.nan, 8)
+    assert short.tolist() == [0, 1, 2, 3, 4]
+
+
+@pytest.mark.parametrize('k1', [0, -1, True, 2.5, 9])
+def test_k1_must_fill_top_k(k1):
+    with pytest.raises(ValueError, match='k1'):
+        reranking_settings({'top_k': 10, 'reranking': {'policy_type':'diverse_tail', 'k1':k1}})

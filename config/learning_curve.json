@@ -39,7 +39,7 @@
   "top_k": 10,
   "reranking": {
     "enabled": true,
-    "decay_function_type": "linear",
+    "decay_function_type": "exponential",
     "decay_function_rate": 1.0,
     "alpha_min": 0.2,
     "alpha_max": 1.0,
@@ -49,6 +49,9 @@
     "history_decay_rate_per_minute": 0.13862943611198905,
     "history_max_events": 100,
     "minimum_history_items": 2,
-    "diversity_metric": "combined"
+    "diversity_metric": "combined",
+    "policy_type": "diverse_tail",
+    "relevance_slots": 6,
+    "k1": 500
   }
 }

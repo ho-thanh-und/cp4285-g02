@@ -194,7 +194,7 @@ example when running an experiment.
   "top_k": 10,
   "reranking": {
     "enabled": true,
-    "decay_function_type": "linear",
+    "decay_function_type": "exponential",
     "decay_function_rate": 1.0,
     "alpha_min": 0.2,
     "alpha_max": 1.0,
@@ -204,7 +204,10 @@ example when running an experiment.
     "history_decay_rate_per_minute": 0.13862943611198905,
     "history_max_events": 100,
     "minimum_history_items": 2,
-    "diversity_metric": "combined"
+    "diversity_metric": "combined",
+    "policy_type": "diverse_tail",
+    "relevance_slots": 6,
+    "k1": 500
   }
 }
 ```
@@ -221,6 +224,36 @@ fixed across sizes, even when the purchase count grows. `seed` controls the mode
 randomness. The nested sampling order comes from the original pilot protocol,
 whose manifest is recorded with the experiment. `query_batch_size` controls how
 many query groups are expanded together when constructing features.
+
+## Six relevant items and four diverse items
+
+The current `config/learning_curve.json` uses `top_k: 10` and, under
+`reranking`, `policy_type: "diverse_tail"`, `relevance_slots: 6`, and `k1: 500`.
+First score the logged candidates and retain the top K1 by relevance. Keep the
+first six as the relevance head. From the remainder of K1, choose four items
+with high **mutual** diversity and sort those four by relevance. If fewer than
+K1 candidates are logged, use the available candidates. K1 must be at least
+`top_k`. This filter occurs after model scoring; it is not a full-catalog retrieval stage. It seeds the most distant remaining pair and
+then greedily adds the item with the largest total distance to the selected
+four-item group. This is an approximation; it does not guarantee the globally
+most diverse set. Missing pair distances receive zero selection reward, and
+unknown pairs are excluded from reported ILD with coverage recorded.
+
+`reranking_metrics.csv` reports `head_click_ndcg` and `head_gain_ndcg` for the
+first six, `tail_diversity_ild` for the final four, and overall top-K metrics.
+NDCG measures logged relevance; ILD measures variety. A lower NDCG can accompany
+more diversity, but unclicked items in historical logs are not necessarily
+irrelevant. Purchase metrics remain useful, with small-sample caution.
+
+The earlier saved 6 + 4 results were measured before the K1 filter was added;
+they should not be labelled as K1-filtered results. Use a new experiment to
+measure K1. The configured candidate-pool size is saved per query and its mean
+is included in `reranking_metrics.csv`.
+
+Use `policy_type: "adaptive"` to return to the existing weighted decay policy.
+Decay settings apply to that policy, not the six-and-four policy. Since this
+changes the experiment code and configuration, use a new `--curve-root` when
+training another size, for example `results/six_four`.
 
 ## 3. How the two decay controls differ
 

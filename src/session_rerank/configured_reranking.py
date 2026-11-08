@@ -32,7 +32,7 @@ def evaluate_manual_reranking(config, folder):
     if not settings["enabled"]:
         finish_stage(folder, "manual_reranking", outputs)
         return
-    print(f"[4/4] Validate top-{k} lists with {settings['decay_function_type']} relevance weighting "
+    print(f"[4/4] Validate top-{k} lists with {settings['policy_type']} policy "
           f"and {settings['history_decay_type']} history decay", flush=True)
     scores = read_candidates(folder, "validation")
     queries = pd.read_parquet(folder / "validation_features" / "queries.parquet")
@@ -68,6 +68,17 @@ def evaluate_manual_reranking(config, folder):
                 elapsed = (perf_counter()-started)*1000
                 measured = relevance_metrics(order, group.clicked, group.purchased, config["label_gains"], k)
                 pairs = np.triu_indices(len(order), 1)
+                # Review the relevance head and diverse tail separately. The
+                # head cutoff is fixed by the configured quota, for both policies.
+                head_count = min(settings["relevance_slots"], len(order))
+                head_metrics = (relevance_metrics(order[:head_count], group.clicked, group.purchased,
+                                                  config["label_gains"], head_count)
+                                if head_count else None)
+                tail_order = order[head_count:]
+                tail_pairs = np.triu_indices(len(tail_order), 1)
+                tail_values = distances[settings["diversity_metric"]][np.ix_(tail_order, tail_order)][tail_pairs]
+                tail_known = tail_values[np.isfinite(tail_values)]
+                tail_ild = float(tail_known.mean()) if len(tail_known) else np.nan
                 diversity = {}
                 for name, distance in distances.items():
                     values = distance[np.ix_(order, order)][pairs]
@@ -77,19 +88,26 @@ def evaluate_manual_reranking(config, folder):
                 rows.append(dict(
                     model=model, policy_id=policy["id"], query_id=int(qid), session_key=group.session_key.iloc[0],
                     top_k=k, topk_item_ids=json.dumps(items[order].tolist()), history_ild=history_ild,
+                    candidate_pool_size=(min(len(items), settings["k1"]) if policy["id"] == "configured"
+                                         and settings["policy_type"] == "diverse_tail" else len(items)),
                     alpha=relevance_weight(policy, history_ild), rerank_ms=elapsed, pairwise_ms=pairwise_ms,
-                    diversity_ild=diversity[settings["diversity_metric"]+"_ild"], **measured, **diversity,
+                    diversity_ild=diversity[settings["diversity_metric"]+"_ild"],
+                    head_click_ndcg=head_metrics["click_ndcg"] if head_metrics else np.nan,
+                    head_gain_ndcg=head_metrics["gain_ndcg"] if head_metrics else np.nan,
+                    tail_diversity_ild=tail_ild, **measured, **diversity,
                 ))
         if number % 100 == 0 or number == len(queries):
             print(f"Reranking validation: {number:,}/{len(queries):,} queries, {len(predictions)} models", flush=True)
     measured = pd.DataFrame(rows)
     metrics = ["click_ndcg", "gain_ndcg", "recall_at_k", "purchase_recall", "diversity_ild",
-               "token_ild", "category_ild", "combined_ild", "rerank_ms", "pairwise_ms"]
+               "token_ild", "category_ild", "combined_ild", "head_click_ndcg", "head_gain_ndcg",
+               "tail_diversity_ild", "rerank_ms", "pairwise_ms"]
     summary = measured.groupby(["model", "policy_id", "top_k"], sort=False)[metrics].mean().reset_index()
     counts = measured.groupby(["model", "policy_id"], sort=False).agg(
-        queries=("query_id", "size"), click_queries=("click_ndcg", "count"),
+        queries=("query_id", "size"), mean_candidate_pool_size=("candidate_pool_size", "mean"),
+        click_queries=("click_ndcg", "count"),
         gain_queries=("gain_ndcg", "count"), purchase_queries=("purchase_recall", "count"),
-        diversity_queries=("diversity_ild", "count"),
+        diversity_queries=("diversity_ild", "count"), tail_diversity_queries=("tail_diversity_ild", "count"),
     ).reset_index()
     save_table(measured, folder / "validation_reranking.parquet")
     save_table(summary.merge(counts, on=["model", "policy_id"]), folder / "reranking_metrics.csv")

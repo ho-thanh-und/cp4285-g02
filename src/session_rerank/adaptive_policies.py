@@ -19,7 +19,7 @@ def relevance_weight(policy, history_ild):
     family = policy["family"]
     if family in ("relevance", "original"):
         return 1.0
-    if family == "quota":
+    if family in ("quota", "diverse_tail"):
         return np.nan
     if family == "fixed":
         return float(policy["weight"])
@@ -46,6 +46,40 @@ def relevance_weight(policy, history_ild):
     return float(np.clip(low + (high - low) * fraction, low, high))
 
 
+def diverse_tail_order(scores, distances, keep, k, k1=None):
+    """Keep top relevance items; greedily maximize diversity within the tail.
+
+    Restrict the pool to the top K1 by relevance before selecting either part.
+    Seed with the most distant pair among remaining products, then repeatedly
+    add the item with the largest total distance to the selected tail. This is
+    an approximation to the maximum-sum subset. Sort only the chosen tail by
+    relevance so positions 1..keep retain the highest relevance products.
+    Unknown distances are supplied as zero by the caller; ties are stable.
+    """
+    scores = np.asarray(scores)
+    k = min(k, len(scores))
+    # K1 is the candidate pool after ranking by relevance. If the logged list
+    # has fewer than K1 products, use all of them; do not invent candidates.
+    relevance_order = np.argsort(-scores, kind="stable")[:k1]
+    head = relevance_order[:min(keep, k)].tolist()
+    remaining = relevance_order[min(keep, k):].tolist()
+    needed = min(k - len(head), len(remaining))
+    tail = []
+    if needed >= 2:
+        sub = distances[np.ix_(remaining, remaining)]
+        i, j = np.triu_indices(len(remaining), 1)
+        best = int(np.argmax(sub[i, j]))
+        tail = [remaining[i[best]], remaining[j[best]]]
+        remaining = [item for item in remaining if item not in tail]
+    elif needed == 1:
+        tail = [remaining.pop(0)]
+    while len(tail) < needed:
+        values = distances[np.ix_(remaining, tail)].sum(axis=1)
+        tail.append(remaining.pop(int(np.argmax(values))))
+    tail.sort(key=lambda item: (-scores[item], item))
+    return np.asarray(head + tail, dtype=int)
+
+
 def expanded_order(scores, distances, policy, history_ild, k=10):
     """Build exactly min(k, candidates) items without changing pilot constants."""
     family = policy["family"]
@@ -53,6 +87,8 @@ def expanded_order(scores, distances, policy, history_ild, k=10):
         return np.argsort(-np.asarray(scores), kind="stable")[:k]
     if family == "quota":
         return quota_order(scores, distances, min(policy["keep"], k), k=k)
+    if family == "diverse_tail":
+        return diverse_tail_order(scores, distances, policy["keep"], k, policy.get("k1"))
     return greedy_rerank(scores, distances, relevance_weight(policy, history_ild), k)
 
 
