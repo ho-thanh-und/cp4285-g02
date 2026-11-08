@@ -23,6 +23,8 @@ Contents
    - [6d. Experiment H (Phase 5, category pages): held-out selection set](#6d-experiment-h-phase-5-category-pages-held-out-selection-set)
    - [6e. Experiment I (Phase 4, item page): "You may also like" with 6 + 4](#6e-experiment-i-phase-4-item-page-you-may-also-like-with-6--4)
    - [6f. Experiment J (Phase 5, item page): held-out selection week](#6f-experiment-j-phase-5-item-page-held-out-selection-week)
+   - [6g. Experiment K (Phase 4, home page): session two-tower vs item-kNN](#6g-experiment-k-phase-4-home-page-session-two-tower-vs-item-knn)
+   - [6h. Experiment L (Phase 5, home page): held-out selection week](#6h-experiment-l-phase-5-home-page-held-out-selection-week)
 7. [Decisions](#7-decisions)
 8. [Plan and status](#8-plan-and-status)
 9. [Known issues and caveats](#9-known-issues-and-caveats)
@@ -42,7 +44,7 @@ which is why this did not show up before.
 - `src/session_rerank/__init__.py` now imports LightGBM first, so any script
   that imports `session_rerank` before pandas is safe.
 - `tests/conftest.py` does the same for the test suite.
-- Test suite on Windows: **167 of 169 pass** (as of §6f; 141 of 143 when
+- Test suite on Windows: **174 of 176 pass** (as of §6h; 141 of 143 when
   first fixed). The 2 failures
   (`test_anonymous_study.py`, `test_expanded_study.py`, older study pipelines)
   fail while writing a temporary file at the end of a ~250-character path;
@@ -62,6 +64,7 @@ which is why this did not show up before.
 | `item_knn.py` | `item-knn` | `config/item_knn.json` (its `compare_with` lists the Phase 2 runs to join) | `tests/test_item_knn.py` |
 | `heldout.py` | `heldout` | `config/heldout.json` | `tests/test_heldout.py` |
 | `ymal.py` | `ymal` | `config/ymal.json` (validation week), `config/ymal_selection.json` (frozen policy, selection week) | `tests/test_ymal.py` |
+| `home_page.py` | `home-page` | `config/home_page.json` (validation week), `config/home_page_selection.json` (frozen policy and model, selection week) | `tests/test_home_page.py` |
 
 **Analysis scripts** moved into the repository: `scripts/analysis/session_lengths.py`
 and `scripts/analysis/click_view.py`. Other dataset facts below were measured
@@ -738,11 +741,111 @@ variety.
 
 ---
 
+## 6g. Experiment K (Phase 4, home page): session two-tower vs item-kNN
+
+`results/home_page/20261108T095146Z_validation/` — `uv run main.py home-page` (`config/home_page.json`)
+
+**Design** (`home_page.py`):
+
+- **Session two-tower** trained on every eligible April session in the raw
+  files: each prefix of a session's distinct clicks (last 20) predicts the next
+  clicked product (128,825 examples). Session side: mean and last of the
+  clicked products' vectors plus session length. Product side: name tokens,
+  category, price band, leak-safe daily click and purchase rates. Sampled
+  softmax against 10 uniform and 10 popularity-weighted random products; epoch
+  chosen on a fixed 3,000-case subset of the validation week (best: epoch 5 of
+  5; check recall@10 0.136, 0.123, 0.134, 0.135, 0.138). Model saved for reuse.
+- **Cases:** in the validation week's 18,645 eligible sessions, every point
+  after at least one click with a later click on a different product (26,419;
+  20,000 sampled). 10 products from the whole catalog, excluding products
+  already clicked; hits are the later clicks; no penalty otherwise. Cold start
+  (no clicks) is popularity and can only be measured online.
+- **Methods:** popularity, trending (last 7 days of April), item-kNN on the
+  session's clicks (sum of co-click similarities), the two-tower; then relevance
+  only, fixed alpha 0.8 and 6 + 4 over a 20-product pool of the two-tower and of
+  item-kNN.
+
+**Results** (20,000 cases; intervals from 2,000 session-bootstrap replicates):
+
+| Method | Recall@10 | Hit rate | MRR@10 | NDCG@10 | ILD@10 | Category ILD | Categories in list | Outside last click's category |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Popularity | 0.004 | 0.011 | 0.006 | 0.004 | 0.663 | 0.381 | 3.0 | 94% |
+| Trending | 0.006 | 0.015 | 0.003 | 0.003 | 0.656 | 0.377 | 3.0 | 94% |
+| **Item-kNN** | **0.157** | **0.329** | **0.149** | **0.121** | 0.628 | 0.318 | 2.5 | 31% |
+| Two-tower | 0.137 | 0.302 | 0.123 | 0.100 | 0.441 | 0.012 | 1.0 | 1% |
+| Two-tower + fixed 0.8 | 0.137 | 0.302 | 0.123 | 0.099 | 0.444 | 0.014 | 1.1 | 1% |
+| Two-tower + 6 + 4 | 0.133 | 0.300 | 0.123 | 0.098 | 0.463 | 0.024 | 1.1 | 2% |
+| **Item-kNN + fixed 0.8** | 0.151 | 0.321 | 0.147 | 0.117 | 0.667 | 0.388 | 2.9 | 35% |
+| Item-kNN + 6 + 4 | 0.141 | 0.309 | 0.147 | 0.114 | 0.712 | 0.467 | 3.4 | 39% |
+
+- **Catalog-wide popularity fails** (recall 0.004): without a category, the
+  most popular products overall are rarely what a shopper clicks next.
+  Personalisation after the first click is essential on this page.
+- **Item-kNN beats the two-tower:** recall +0.020 (+0.013, +0.025), MRR +0.026
+  (+0.018, +0.035), NDCG +0.021 (+0.015, +0.028). After one click the two are
+  level on recall (0.174 each) with item-kNN ahead on NDCG (0.118 vs 0.109);
+  after two or more clicks item-kNN is clearly ahead (NDCG 0.123 vs 0.095).
+- **The two-tower is almost single-category:** 99% of its products share the
+  last clicked product's category (category ILD 0.012). Its 20-product pool
+  therefore leaves fixed alpha and 6 + 4 almost nothing to diversify (ILD +0.003
+  and +0.022).
+- **Diversity on item-kNN** (against item-kNN relevance only): fixed 0.8 costs
+  NDCG −0.004 (−3.0%) for ILD +0.039 and 2.9 categories; 6 + 4 costs −5.9% for
+  ILD +0.084 and 3.4 categories, the same trade-off as on the item page.
+- **Rule check** (most ILD within 5% NDCG loss, applied to the best base): item-
+  kNN + fixed alpha 0.8 passes (−3.0%); 6 + 4 does not (−5.9%).
+
+**Reading.** On this proxy the classical co-click filter is both more accurate
+and more diverse than the neural session model, which learned to stay inside
+the last category. Possible two-tower improvements (more epochs, larger
+embeddings, a category-mixing negative sampler) were not tried.
+
+**Decision (user, 2026-11-08): item-kNN with fixed alpha 0.8 over a 20-product
+pool** for the home page after the first click (popularity before it). This
+replaces the brief's two-tower, following the data and the declared 5% rule.
+The session two-tower stays in the study as the evaluated neural model.
+Frozen in `config/home_page_selection.json` (frozen run = this folder).
+
+---
+
+## 6h. Experiment L (Phase 5, home page): held-out selection week
+
+`results/home_page/20261108T102455Z_selection/` — `uv run main.py home-page --home-config config/home_page_selection.json`
+
+**Procedure.** `frozen_choices.json` (policy `fixed_0.8_item_knn`, the user's
+reason, saved model path; code: commit `56f562a` plus the uncommitted home-page
+code) was written before the week was read. The saved session two-tower was
+reused, not retrained. Week May 9–14: 19,270 eligible sessions, 29,951
+evaluable cases, 20,000 sampled.
+
+| Method | Recall@10 | Hit rate | MRR@10 | NDCG@10 | ILD@10 | Category ILD | Categories in list |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Popularity | 0.001 | 0.005 | 0.001 | 0.001 | 0.662 | 0.379 | 3.0 |
+| Trending | 0.002 | 0.009 | 0.002 | 0.001 | 0.656 | 0.377 | 3.0 |
+| Item-kNN | 0.151 | 0.309 | 0.133 | 0.105 | 0.640 | 0.343 | 2.6 |
+| Two-tower | 0.138 | 0.293 | 0.116 | 0.092 | 0.442 | 0.016 | 1.1 |
+| **Item-kNN + fixed 0.8 (frozen)** | 0.146 | 0.302 | 0.130 | 0.102 | **0.680** | **0.414** | **3.1** |
+| Item-kNN + 6 + 4 | 0.136 | 0.288 | 0.130 | 0.099 | 0.725 | 0.493 | 3.6 |
+
+- **Frozen policy vs item-kNN relevance only:** NDCG −0.003 (−3.1%), ILD
+  +0.040; inside the 5% rule, as on validation (−3.0%, +0.039).
+- **Frozen policy vs the two-tower:** NDCG +0.010 (+0.005, +0.014), MRR
+  +0.014 (+0.007, +0.020), recall +0.008 (+0.002, +0.014), ILD +0.238.
+- **Item-kNN vs the two-tower:** NDCG +0.013 (+0.008, +0.017); the validation
+  ranking held.
+- Catalog-wide popularity again fails once a shopper has clicked (NDCG 0.001).
+
+**Reading.** All three pages are now frozen and confirmed on the untouched
+selection week. The confirmation week can be opened once, for all three.
+
+---
+
 ## 7. Decisions
 
 | Date | Decision | Evidence |
 |---|---|---|
 | 2026-11-08 | **Category-page ranker adds window popularity features; lead candidate is `rank_xendcg` with those features.** Position correction and learning rate 0.02 are not adopted for now. | §6a: popularity +0.03 (intervals above zero); xendcg is the only variant ahead of the popularity sort in every model/statistic. To be confirmed on selection data (Phase 5). |
+| 2026-11-08 | **Home page uses item-kNN on the session's clicks with fixed alpha 0.8 over a 20-product pool** after the first click, popularity before it (user decision, replaces the brief's two-tower); frozen before the selection week is opened. | §6g: item-kNN beats the session two-tower (NDCG +0.021, interval above zero) and is far more diverse; fixed 0.8 costs −3.0% NDCG for +0.039 ILD. |
 | 2026-11-08 | **"You may also like" uses item-kNN with fixed alpha 0.8 over a 20-product pool** (user decision, replaces the brief's 6 + 4 for this page); frozen before the selection week is opened. | §6e: within the declared 5% NDCG rule (−4.0%), +0.033 ILD; 6 + 4 gave twice the diversity at −5.9%. Speed is equal. |
 | 2026-11-08 | **Category-page choices frozen; `purchase_session` (popularity + xendcg, 50k) is the category-page ranker.** | §6d: frozen before the selection split was read; selection confirms LightGBM over both baselines; the declared rule picks `purchase_session` by 0.0001 NDCG (a practical tie). |
 | 2026-11-08 | **Item-kNN on session co-clicks is the classical CF baseline** (and the planned "You may also like" model); MRR@10 is reported with NDCG@10 and Recall@10. | §6c: LightGBM beats item-kNN by +0.025 NDCG (interval above zero); item-kNN beats popularity only in direction. |
@@ -772,8 +875,8 @@ variety.
 | 1 | Views ablation; multi-click training filter | **Done** (§6, §7) |
 | 2 | Relevance model: full-April popularity in LightGBM; position debias (LightGBM `position`); `lambdarank` vs `rank_xendcg`; RankNet MLP check; optional GRU4Rec feature; lower learning rate; scale to 50k and all queries | **Steps 1–2 done** (§6a: popularity, position, xendcg, learning rate; §6b: 50k queries). Left: all-data training (needs less memory per row or a larger machine); RankNet MLP check; optional GRU4Rec feature |
 | 3 | Filter: retrain two-tower on all data; compare with popularity filter using the Phase 2 ranker; choose K1 and whether never-shown products are allowed | Pending |
-| 4 | Diversity: fixed-alpha curve vs adaptive policies (session variety, query position, category switch); declared rule: most ILD within 5% NDCG loss | **Item page evaluated on validation** (§6e); fixed alpha 0.8 (K1 = 20) chosen and frozen 2026-11-08. Home page pending |
-| 5 | Choose on selection, freeze, evaluate confirmation; session-bootstrap intervals by segment | **Category pages and item page: frozen and evaluated on selection** (§6d, §6f). Confirmation sealed until the home page is frozen |
+| 4 | Diversity: fixed-alpha curve vs adaptive policies (session variety, query position, category switch); declared rule: most ILD within 5% NDCG loss | **Item page evaluated on validation** (§6e); fixed alpha 0.8 (K1 = 20) chosen and frozen 2026-11-08. **Home page evaluated on validation** (§6g); item-kNN + fixed alpha 0.8 chosen and frozen 2026-11-08 |
+| 5 | Choose on selection, freeze, evaluate confirmation; session-bootstrap intervals by segment | **All three pages frozen and evaluated on selection** (§6d, §6f, §6h). Confirmation week not opened yet |
 
 ### 8.0 Course requirements checklist (assessed 2026-11-08)
 
@@ -855,6 +958,8 @@ uv run main.py item-knn --trained-run results/learning_curve_v2/queries_50000
 uv run main.py heldout
 uv run main.py ymal
 uv run main.py ymal --ymal-config config/ymal_selection.json
+uv run main.py home-page
+uv run main.py home-page --home-config config/home_page_selection.json
 uv run python scripts/analysis/session_lengths.py data/raw OUTPUT_FOLDER
 uv run python scripts/analysis/click_view.py data/raw
 ```
@@ -878,3 +983,5 @@ uv run python scripts/analysis/click_view.py data/raw
 | `heldout/…/summary.csv`, `differences.csv`, `selection_per_query.parquet` | Held-out NDCG/Recall/MRR by method and segment, with intervals |
 | `heldout/…/click_session.txt`, `purchase_session.txt`, `selection.sqlite` | Frozen models and the rebuilt selection split |
 | `ymal/…/summary.csv`, `differences.csv`, `per_page.parquet` | Item-page relevance and diversity by method; differences vs category popularity and vs relevance only |
+| `home_page/…/summary.csv`, `differences.csv`, `per_case.parquet` | Home-page relevance and diversity by method and clicks so far; differences vs popularity and vs the two-tower |
+| `home_page/…/session_two_tower.pt`, `training_log.csv` | Saved session two-tower (reused by a selection run) and its epoch log |

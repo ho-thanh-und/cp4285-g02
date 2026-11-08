@@ -1,0 +1,44 @@
+{
+  "output_directory": "results/home_page",
+  "raw_directory": "data/raw",
+  "trained_run": "results/learning_curve_v2/queries_50000",
+  "knn_config": "config/item_knn.json",
+  "training_window": {
+    "start": "2016-04-01",
+    "end_exclusive": "2016-04-30"
+  },
+  "window": {
+    "name": "selection",
+    "start": "2016-05-09",
+    "end_exclusive": "2016-05-15"
+  },
+  "history_items": 20,
+  "max_name_tokens": 12,
+  "embedding_dim": 32,
+  "hidden_dim": 64,
+  "epochs": 5,
+  "batch_size": 512,
+  "learning_rate": 0.003,
+  "uniform_negatives": 10,
+  "popular_negatives": 10,
+  "popular_negative_power": 0.75,
+  "trending_days": 7,
+  "top_k": 10,
+  "relevance_slots": 6,
+  "pool_size": 20,
+  "fixed_alphas": [
+    0.8
+  ],
+  "diversity_bases": [
+    "two_tower",
+    "item_knn"
+  ],
+  "max_cases": 20000,
+  "epoch_check_cases": 3000,
+  "bootstrap_replicates": 2000,
+  "seed": 4285,
+  "threads": 4,
+  "frozen_run": "results/home_page/20261108T095146Z_validation",
+  "frozen_policy": "fixed_0.8_item_knn",
+  "frozen_reason": "Chosen by the user on 2026-11-08 from validation (EXPERIMENT_LOG.md 6g): item-kNN beat the session two-tower on NDCG, recall and MRR and on diversity; fixed alpha 0.8 over a 20-product pool stays within the declared 5% NDCG rule (-3.0%, +0.039 ILD). The two-tower is kept as the evaluated neural comparison."
+}

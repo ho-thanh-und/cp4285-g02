@@ -181,6 +181,8 @@ uv run main.py item-knn --trained-run results/learning_curve_v2/queries_50000
 uv run main.py heldout
 # Item page "You may also like": item-kNN lists, relevance only vs fixed alpha vs 6 + 4 (config/ymal.json).
 uv run main.py ymal
+# Home page: session two-tower vs item-kNN over the whole catalog, with diversity policies (config/home_page.json).
+uv run main.py home-page
 ```
 
 Settings live in `config/alpha_sweep.json`, `config/two_tower.json`,
