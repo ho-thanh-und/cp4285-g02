@@ -141,3 +141,94 @@ def test_train_compare_and_reuse_on_selection(tmp_path):
     held_out = run_sequence_models(selection, output_root=tmp_path / "sequence")
     assert (held_out / "frozen_choices.json").exists()
     assert pd.read_parquet(held_out / "per_case.parquet").groupby("method").size().iloc[0] == 40
+
+
+def _synthetic_runs(tmp_path):
+    """Raw files, catalog, item-kNN settings and validation/selection home-page runs."""
+    raw, run = tmp_path / "raw", tmp_path / "run"
+    raw.mkdir()
+    run.mkdir()
+    rng = np.random.default_rng(0)
+    items = np.arange(1, 41)
+    pd.DataFrame(dict(item_id=items, price_log2=items % 5, category_id=items % 4,
+                      name_tokens=[f"{i % 7},{i % 5 + 10}" for i in items])).to_parquet(run / "products.parquet")
+    queries, clicks, qid = [], [], 0
+    for day, count in (("2016-04-03", 80), ("2016-04-20", 80), ("2016-05-02", 25), ("2016-05-10", 20)):
+        for session in range(count):
+            qid += 1
+            queries.append((qid, f"{day}-{session}", day, False))
+            for position, item in enumerate(rng.choice(items, 3, replace=False)):
+                clicks.append((qid, 100 * position, int(item)))
+    pd.DataFrame(queries, columns=["queryId", "sessionId", "eventdate", "is.test"]).to_csv(
+        raw / "train-queries.csv", sep=";", index=False)
+    pd.DataFrame(clicks, columns=["queryId", "timeframe", "itemId"]).to_csv(raw / "train-clicks.csv", sep=";", index=False)
+    pd.DataFrame(dict(itemId=[1], eventdate=["2016-04-05"])).to_csv(raw / "train-purchases.csv", sep=";", index=False)
+    knn = tmp_path / "knn.json"
+    knn.write_text(json.dumps(dict(output_directory="x", raw_directory=str(raw), max_items_per_session=50,
+                                   shrinkage=0, compare_with=[], bootstrap_replicates=10, seed=1)))
+    common = dict(raw_directory=str(raw), trained_run=str(run), knn_config=str(knn))
+    home_validation = tmp_path / "home.json"
+    home_validation.write_text(json.dumps(HOME_SETTINGS | common))
+    home_run = run_home_page(home_validation, output_root=tmp_path / "home")
+    home_selection = tmp_path / "home_selection.json"
+    home_selection.write_text(json.dumps(HOME_SETTINGS | common | dict(
+        window=dict(name="selection", start="2016-05-09", end_exclusive="2016-05-15"),
+        frozen_run=str(home_run), frozen_policy="fixed_0.8_item_knn")))
+    selection_home_run = run_home_page(home_selection, output_root=tmp_path / "home")
+    return home_validation, home_run, home_selection, selection_home_run
+
+
+def test_diversity_variants_reuse_and_frozen_policy(tmp_path):
+    home_validation, home_run, home_selection, selection_home_run = _synthetic_runs(tmp_path)
+    base = SEQUENCE | dict(models=["sasrec"], home_config=str(home_validation), home_run=str(home_run))
+    trained = tmp_path / "trained.json"
+    trained.write_text(json.dumps(base))
+    first = run_sequence_models(trained, output_root=tmp_path / "sequence")
+    # Score the saved model again, now with the diversity reorderings of its top pool_size products.
+    reuse = tmp_path / "reuse.json"
+    reuse.write_text(json.dumps(base | dict(reuse_run=str(first), diversity=True)))
+    second = run_sequence_models(reuse, output_root=tmp_path / "reused")
+    per_case = pd.read_parquet(second / "per_case.parquet")
+    assert set(per_case.method) == {"sasrec", "six_four_sasrec", "fixed_0.8_sasrec"}
+    before = pd.read_parquet(first / "per_case.parquet").sort_values("case")
+    after = per_case[per_case.method.eq("sasrec")].sort_values("case")
+    assert np.allclose(before.ndcg, after.ndcg) and np.allclose(before.combined_ild, after.combined_ild)
+    lists = pd.read_parquet(second / "lists.parquet")
+    assert lists.groupby(["case", "method"]).size().eq(HOME_SETTINGS["top_k"]).all()
+    # The reordered lists draw on the same pool: the first product is always the most relevant.
+    first_items = lists[lists.position.eq(1)].pivot(index="case", columns="method", values="item_id")
+    assert first_items.nunique(axis=1).eq(1).all()
+    assert set(pd.read_csv(second / "differences.csv").method) == set(per_case.method)
+    # Selection records the frozen policy before scoring the frozen run.
+    selection = tmp_path / "selection.json"
+    selection.write_text(json.dumps(base | dict(
+        home_config=str(home_selection), home_run=str(selection_home_run), frozen_run=str(second),
+        diversity=True, frozen_policy="fixed_0.8_sasrec", frozen_reason="test")))
+    held_out = run_sequence_models(selection, output_root=tmp_path / "held_out")
+    frozen = json.loads((held_out / "frozen_choices.json").read_text())
+    assert frozen["policy"] == "fixed_0.8_sasrec" and frozen["page"] == "home page"
+    assert set(pd.read_parquet(held_out / "per_case.parquet").method) == set(per_case.method)
+
+
+@pytest.mark.parametrize("update, message", [
+    (dict(frozen_policy="fixed_0.8_sasrec"), "frozen_policy"),  # diversity is off
+    (dict(diversity=True, frozen_policy="fixed_0.5_sasrec"), "frozen_policy"),
+])
+def test_frozen_policy_must_be_an_evaluated_method(tmp_path, update, message):
+    home = tmp_path / "home.json"
+    home.write_text(json.dumps(HOME_SETTINGS))
+    path = tmp_path / "sequence.json"
+    path.write_text(json.dumps(SEQUENCE | dict(models=["sasrec"], home_config=str(home)) | update))
+    with pytest.raises(ValueError, match=message):
+        read_sequence_settings(path)
+
+
+def test_reuse_run_is_only_for_the_validation_week(tmp_path):
+    home = tmp_path / "home.json"
+    home.write_text(json.dumps(HOME_SETTINGS | dict(window=dict(name="selection", start="2016-05-09",
+                                                                end_exclusive="2016-05-15"),
+                                                    frozen_run="x", frozen_policy="item_knn")))
+    path = tmp_path / "sequence.json"
+    path.write_text(json.dumps(SEQUENCE | dict(home_config=str(home), frozen_run="y", reuse_run="z")))
+    with pytest.raises(ValueError, match="reuse_run"):
+        read_sequence_settings(path)

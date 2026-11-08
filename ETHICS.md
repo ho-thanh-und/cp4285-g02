@@ -31,8 +31,10 @@ products more than shoppers' own choices do.
 |---|---|---:|---:|---:|---:|
 | Home | Popularity (cold start) | 12 | 100% | 0% | 3.32 |
 | Home | Item-kNN | 27,461 | 32.4% | 0% | 1.07 |
-| Home | **Item-kNN + fixed 0.8 (frozen)** | 27,431 | **31.3%** | 0% | **1.04** |
+| Home | Item-kNN + fixed 0.8 (previous home page) | 27,431 | 31.3% | 0% | 1.04 |
 | Home | Two-tower | 27,670 | 39.1% | 12.5% | 1.30 |
+| Home | SASRec, relevance only | 26,199 | 39.7% | 5.4% | 1.32 |
+| Home | **SASRec + 6 + 4 (frozen)** | 26,652 | **39.1%** | 5.6% | **1.30** |
 | Home | Shoppers' later clicks | 14,095 | 30.1% | 14.1% | 1.00 |
 | Item | Category popularity | 8,012 | 72.8% | 0.8% | 2.42 |
 | Item | Item-kNN, relevance only | 32,070 | 30.2% | 0.3% | 1.00 |
@@ -50,19 +52,26 @@ What this shows:
   home page shows the same 12 products to every visitor. Category popularity
   on the item page puts 73% of slots on the 2% head. This is the cost of
   cold start and the reason popularity is used only until the first click.
-- **Personalised home and item lists match shoppers' own concentration.** The
-  frozen item-kNN lists put 29–31% of slots on head products, about the same
-  as shoppers' clicks (30%). They show 27,000–32,000 different products in a
-  week, roughly twice as many as shoppers clicked.
+- **Item-kNN lists match shoppers' own concentration.** On the item page and
+  the previous home page they put 29–31% of slots on head products, about the
+  same as shoppers' clicks (30%). They show 27,000–32,000 different products in
+  a week, roughly twice as many as shoppers clicked.
+- **The new home page (SASRec + 6 + 4) trades exposure for accuracy.** It is
+  16% more accurate than item-kNN + fixed 0.8 on the selection week (NDCG
+  0.118 vs 0.102), but it puts 39% of slots on the 2% head (1.3 times
+  shoppers' share, against 1.04), and shows slightly fewer distinct products
+  (26,652 vs 27,431). Like the category-page ranker, the more accurate model
+  leans more on popular products. It does reach some products with no April
+  clicks (5.6% of slots), which it learned from February and March sessions.
 - **The diversity reranking helps only a little.** Fixed alpha 0.8 lowers the
   head share by about one point on both pages and barely changes how many
   products are shown. It diversifies names and categories within one list,
   which is a different goal from spreading exposure across the catalog.
-- **No method except the two-tower reaches products without past clicks.**
-  14% of what shoppers clicked next had no April clicks. Item-kNN cannot
-  recommend those products, because it needs co-clicks. The two-tower gives
-  them 12.5% of home-page slots, using name, category and price, but puts
-  more weight on the head (ratio 1.30).
+- **Products without past clicks are hard to reach.** 14% of what shoppers
+  clicked next had no April clicks. Item-kNN cannot recommend those products,
+  because it needs co-clicks. SASRec shows them only if they were clicked in
+  February or March (5.6% of slots). The two-tower gives them 12.5% of
+  home-page slots, using name, category and price.
 - **On category pages, accuracy and exposure pull in opposite directions.**
   The site's own order is the most long-tail (25% head, 25% no-click), but
   also the least accurate (click NDCG@10 0.065). The frozen LightGBM ranker
@@ -83,7 +92,9 @@ Possible mitigations, not yet evaluated:
   exploration slot);
 - cap the popularity features' influence for products with little history;
 - use the two-tower's content signal to fill the item-kNN pool when a
-  product has few co-click neighbours.
+  product has few co-click neighbours;
+- widen SASRec's home-page pool beyond 20 products, or reserve one of the
+  four diverse slots for a tail product.
 
 ## 3. Feedback loops
 

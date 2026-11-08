@@ -1111,9 +1111,164 @@ Check recall@10 so far:
 - dim 128 does not beat dim 64 (best: dim 64, 2 blocks, dropout 0.5, at least
   0.180; dim 128, 2 blocks, dropout 0.5: 0.176).
 A second GPU became available, so the script gained `ONLY` (run only settings
-whose name contains a word): the 4 GRU4Rec settings run there with
-`ONLY=gru4rec`, and the old job is cancelled once its last SASRec setting is
-done.
+whose name contains a word). In the end it was not needed. Three GRU4Rec
+settings had already finished in the earlier job that failed on SASRec (run
+folders 13:48–14:19 UTC). Job 1097527 trained the last GRU4Rec setting itself,
+so the `ONLY` job was never submitted.
+
+**Grid results (validation week, 20,000 home-page cases, 2026-11-09).** All 12
+settings finished. Results were copied to `results/sequence_grid/`
+(`grid_summary.csv`). Re-running the collector locally gives an identical
+table.
+
+| Setting | Best epoch | Recall@10 | MRR@10 | NDCG@10 | NDCG vs frozen item-kNN + fixed 0.8 (95% CI) | Combined ILD |
+|---|---:|---:|---:|---:|---|---:|
+| **SASRec dim 64, 2 blocks, dropout 0.5** | 9 | **0.185** | **0.169** | **0.138** | **+0.021 (+0.016, +0.026)** | 0.513 |
+| SASRec dim 64, 1 block, dropout 0.5 | 12 | 0.182 | 0.166 | 0.136 | +0.018 (+0.014, +0.022) | 0.515 |
+| SASRec dim 128, 1 block, dropout 0.5 | 5 | 0.178 | 0.164 | 0.134 | +0.017 (+0.013, +0.021) | 0.519 |
+| SASRec dim 128, 2 blocks, dropout 0.5 | 30 (still improving) | 0.181 | 0.164 | 0.134 | +0.016 (+0.012, +0.021) | 0.542 |
+| SASRec dim 64, 1 block, dropout 0.2 | 5 | 0.175 | 0.160 | 0.131 | +0.013 | 0.524 |
+| SASRec dim 64, 2 blocks, dropout 0.2 | 5 | 0.175 | 0.159 | 0.130 | +0.013 | 0.523 |
+| GRU4Rec dim 64, lr 0.001 | 30 | 0.169 | 0.155 | 0.127 | +0.010 | 0.551 |
+| SASRec dim 128, 1 block, dropout 0.2 | 3 | 0.168 | 0.157 | 0.127 | +0.010 | 0.522 |
+| SASRec dim 128, 2 blocks, dropout 0.2 | 3 | 0.167 | 0.156 | 0.126 | +0.009 | 0.524 |
+| GRU4Rec dim 64, lr 0.003 | 8 | 0.162 | 0.151 | 0.122 | +0.004 | 0.545 |
+| GRU4Rec dim 128, lr 0.001 | 22 | 0.159 | 0.147 | 0.119 | +0.002 | 0.585 |
+| GRU4Rec dim 128, lr 0.003 | 5 | 0.157 | 0.149 | 0.119 | +0.002 | 0.566 |
+| *item-kNN (April co-clicks)* | – | 0.157 | 0.149 | 0.121 | +0.004 | 0.628 |
+| *item-kNN + fixed 0.8 (frozen home page)* | – | 0.151 | 0.147 | 0.117 | 0 | 0.667 |
+| *SASRec, April only (§6j)* | – | – | – | 0.129 | – | – |
+
+Reading:
+- **Dropout is the lever.** All four dropout-0.5 SASRec settings rank above all
+  four dropout-0.2 ones. With 0.2, the best epoch is 3–5, followed by
+  overfitting. This matches the SASRec paper's use of 0.5 on sparse data.
+- **Larger is not better.** Dim 128 does not beat dim 64. The top two settings
+  differ by only 0.002 NDCG, so the exact choice matters little.
+- **GRU4Rec is weaker.** Its best is 0.127; the lower learning rate is better
+  at dim 64 (0.127 vs 0.122). Every GRU4Rec setting falls below every
+  dropout-0.5 SASRec setting.
+- **More data helps.** The best SASRec on February–April (0.138) beats
+  April-only SASRec (0.129). It also beats item-kNN by +0.017 (+0.012, +0.022)
+  and the frozen home-page policy by +0.021, about +18%.
+- **The best SASRec wins in every history segment** (NDCG):
+
+  | Clicks so far | 1 | 2 | 3–5 | 6+ |
+  |---|---:|---:|---:|---:|
+  | SASRec | 0.143 | 0.135 | 0.121 | 0.154 |
+  | Frozen item-kNN + fixed 0.8 | 0.112 | 0.119 | 0.108 | 0.134 |
+
+- **It is much less diverse.**
+
+  | | SASRec | Frozen item-kNN + fixed 0.8 |
+  |---|---:|---:|
+  | Combined ILD | 0.513 | 0.667 |
+  | Category ILD | 0.106 | 0.388 |
+  | Distinct categories in 10 | 1.5 | 2.9 |
+  | Products outside the last click's category | 10% | 35% |
+
+  SASRec mostly recommends more of the same category. The brief asks the home
+  page for personalisation plus diversity.
+- 1.8% of cases have no click in SASRec's vocabulary (popularity fallback);
+  96.2% have a later click it can predict.
+- **Caveats.**
+  - The setting and its epoch were both chosen on validation data. The
+    margin needs the selection week before it can be trusted.
+  - SASRec saw February–April, while item-kNN's co-clicks are April only.
+    Part of the gap may be data, not model.
+
+**SASRec + diversity (validation, 2026-11-09; the user chose to test it).**
+`sequence_models.py` gained three options:
+- `diversity`: the home page's fixed-alpha and 6 + 4 reorderings of each
+  model's top `pool_size` (20) products, the same code path as for item-kNN.
+  `greedy_rerank` min-max scales relevance, so alpha 0.8 means the same on
+  SASRec scores as on item-kNN scores.
+- `reuse_run`: score saved models without training (validation only).
+- `frozen_policy` / `frozen_reason`: written to `frozen_choices.json` before
+  the selection week opens.
+
+Runs also save the shown lists (`lists.parquet`) for exposure measurement.
+Tests: the variants exist, a reused model reproduces its original per-case
+NDCG and ILD, and invalid policies or a `reuse_run` on the selection week are
+rejected. Full suite: 207 passed, plus the 2 known failures.
+
+Run: `config/sequence_home_diversity.json` reuses the best grid model (dim 64,
+2 blocks, dropout 0.5, epoch 9) on CPU. Output:
+`results/sequence_models/20261108T175008Z_validation`. SASRec's NDCG equals the
+cluster run (0.1379).
+
+| Method | Recall@10 | MRR@10 | NDCG@10 | NDCG vs SASRec | Combined ILD | Category ILD | Categories in 10 | Outside last click's category |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| SASRec (relevance only) | 0.185 | 0.169 | 0.1379 | – | 0.513 | 0.106 | 1.54 | 10.0% |
+| SASRec + fixed 0.8 | 0.183 | 0.169 | 0.1366 | −0.9% | 0.525 | 0.126 | 1.66 | 11.1% |
+| **SASRec + 6 + 4** | 0.173 | 0.168 | **0.1329** | **−3.6%** | **0.554** | 0.168 | 1.92 | 13.2% |
+| item-kNN + fixed 0.8 (frozen) | 0.151 | 0.147 | 0.1173 | −15.0% | 0.667 | 0.388 | 2.95 | 34.6% |
+
+NDCG by clicks so far:
+
+| Clicks so far | 1 | 2 | 3–5 | 6+ |
+|---|---:|---:|---:|---:|
+| SASRec + 6 + 4 | 0.137 | 0.130 | 0.117 | 0.148 |
+| item-kNN + fixed 0.8 (frozen) | 0.112 | 0.120 | 0.108 | 0.134 |
+
+- **Declared rule (most ILD within 5% NDCG loss) → SASRec + 6 + 4.** Both
+  reorderings stay within 5%, and 6 + 4 adds more variety (+0.041 ILD at −3.6%
+  NDCG). This also matches the original brief for the home page ("6 relevance
+  + 4"). On the item-kNN pages, 6 + 4 had cost more than 5%, so fixed 0.8 was
+  chosen there.
+- Against the frozen home-page policy, SASRec + 6 + 4 gains +0.016 NDCG (95% CI
+  +0.011 to +0.021) and wins in every history segment. It is still less diverse
+  (ILD 0.554 vs 0.667; 1.9 vs 2.9 categories). SASRec's top 20 is mostly one
+  category, so reordering within it has limited room. A larger pool was not
+  tested.
+- **Frozen 2026-11-09 (user decision): the home page uses SASRec + 6 + 4.**
+  Model: `results/sequence_models/20261108T175008Z_validation/sasrec.pt`.
+  See §7.
+
+**Selection week (May 9–14, 20,000 home-page cases, opened once,
+2026-11-09).**
+- Config: `config/sequence_home_selection.json`.
+- Run: `results/sequence_models/20261108T182139Z_selection`.
+- `frozen_choices.json` (policy `six_four_sasrec`, with its reason) was written
+  before the week was read. Code: commit e61f0ed plus the uncommitted
+  diversity changes of this entry, which are committed with this log.
+
+| Method | Recall@10 | MRR@10 | NDCG@10 | Combined ILD | Categories in 10 |
+|---|---:|---:|---:|---:|---:|
+| SASRec (relevance only) | 0.178 | 0.152 | 0.1217 | 0.517 | 1.59 |
+| SASRec + fixed 0.8 | 0.177 | 0.151 | 0.1207 | 0.529 | 1.71 |
+| **SASRec + 6 + 4 (frozen)** | 0.168 | 0.151 | **0.1177** | **0.560** | 2.00 |
+| item-kNN + fixed 0.8 (previous home page) | 0.146 | 0.130 | 0.1015 | 0.680 | 3.09 |
+| item-kNN | 0.151 | 0.133 | 0.1048 | 0.640 | 2.61 |
+| two-tower | 0.138 | 0.116 | 0.0920 | 0.442 | 1.06 |
+
+- **The validation result holds.**
+
+  | SASRec + 6 + 4 vs | NDCG (95% CI) | Recall (95% CI) | MRR (95% CI) |
+  |---|---|---|---|
+  | previous home page | +0.016 (+0.012, +0.020), +16% | +0.022 (+0.017, +0.027) | +0.021 (+0.015, +0.027) |
+  | item-kNN | +0.013 (+0.009, +0.017) | | |
+
+- The cost of 6 + 4 is about the same as on validation: −3.3% NDCG against
+  relevance-only SASRec (validation −3.6%), for +0.043 ILD.
+- It wins in every history segment (NDCG):
+
+  | Clicks so far | 1 | 2 | 3–5 | 6+ |
+  |---|---:|---:|---:|---:|
+  | SASRec + 6 + 4 | 0.136 | 0.129 | 0.111 | 0.093 |
+  | previous home page | 0.114 | 0.108 | 0.104 | 0.077 |
+
+- It is still less diverse than the previous home page: ILD −0.120 (−0.124,
+  −0.116); 2.0 vs 3.1 categories.
+- 2.6% of cases have no click in SASRec's vocabulary and get the popularity
+  fallback. 95.6% have a later click the model can predict.
+
+All three pages are now frozen and confirmed on the selection week:
+- category pages: LightGBM purchase_session;
+- item page: item-kNN + fixed 0.8;
+- home page: SASRec + 6 + 4.
+
+Confirmation can be opened once for all three.
 
 ## 6k. Exposure and popularity bias (ethics, selection data, 2026-11-09)
 
@@ -1180,6 +1335,24 @@ popular products, for every evaluated method on all three pages?
 - Gini is near 1 for every method because the catalog is large, so coverage and
   head share are the measures to report.
 
+**Update 2026-11-09: new home page.** After the switch to SASRec + 6 + 4 (§6j,
+§7), the exposure run was repeated with the SASRec selection run added
+(`home_sequence_run`; its saved lists reproduce its saved NDCG).
+Output: `results/exposure/20261108T184420Z`. Every earlier row is identical.
+
+| Home-page method | Distinct shown | Coverage | Head share | Tail | No-click | Head ratio to shoppers |
+|---|---:|---:|---:|---:|---:|---:|
+| SASRec | 26,199 | 0.142 | 0.397 | 0.549 | 0.054 | 1.32 |
+| SASRec + fixed 0.8 | 26,306 | 0.143 | 0.397 | 0.549 | 0.054 | 1.32 |
+| **SASRec + 6 + 4 (frozen)** | 26,652 | 0.145 | 0.391 | 0.553 | 0.056 | 1.30 |
+| item-kNN + fixed 0.8 (previous) | 27,431 | 0.149 | 0.313 | 0.687 | 0 | 1.04 |
+
+- The more accurate home page is also more concentrated on popular products:
+  39% of slots go to the head, against 31%.
+- It reaches some products with no April clicks (5.6% of slots), learned from
+  February and March sessions.
+- 6 + 4 barely changes exposure.
+
 The written section is `ETHICS.md`. It also covers stakeholders, feedback loops,
 training-data biases (position, click-only sessions, never-shown products),
 privacy of the demo website's logging, transparency, AI-generated demo names
@@ -1198,6 +1371,7 @@ passed**, 2 known long-path failures.
 | Date | Decision | Evidence |
 |---|---|---|
 | 2026-11-08 | **Category-page ranker adds window popularity features; lead candidate is `rank_xendcg` with those features.** Position correction and learning rate 0.02 are not adopted for now. | §6a: popularity +0.03 (intervals above zero); xendcg is the only variant ahead of the popularity sort in every model/statistic. To be confirmed on selection data (Phase 5). |
+| 2026-11-09 | **Home page switches to SASRec + 6 + 4** after the first click (popularity before it), replacing item-kNN + fixed 0.8 (user decision, frozen before the selection week is opened). Model: SASRec dim 64, 2 blocks, dropout 0.5, trained on February–April, epoch 9 (`results/sequence_models/20261108T175008Z_validation/sasrec.pt`); 6 + 4 over its top 20 products. | §6j: best of a 12-setting grid; the declared rule (most ILD within 5% NDCG loss) picks 6 + 4 (−3.6% NDCG, +0.041 ILD); +0.016 NDCG over item-kNN + fixed 0.8 (interval above zero) but less diverse (ILD 0.554 vs 0.667). Matches the brief's 6 + 4. |
 | 2026-11-08 | **Home page stays on item-kNN + fixed alpha 0.8 for now**, although SASRec is more accurate on validation (user decision). SASRec to be retested with more training data. | §6j: SASRec NDCG +0.008 over item-kNN but ILD 0.555 vs 0.667 for the frozen policy; one untuned setting. |
 | 2026-11-08 | **Home page uses item-kNN on the session's clicks with fixed alpha 0.8 over a 20-product pool** after the first click, popularity before it (user decision, replaces the brief's two-tower); frozen before the selection week is opened. | §6g: item-kNN beats the session two-tower (NDCG +0.021, interval above zero) and is far more diverse; fixed 0.8 costs −3.0% NDCG for +0.039 ILD. |
 | 2026-11-08 | **"You may also like" uses item-kNN with fixed alpha 0.8 over a 20-product pool** (user decision, replaces the brief's 6 + 4 for this page); frozen before the selection week is opened. | §6e: within the declared 5% NDCG rule (−4.0%), +0.033 ILD; 6 + 4 gave twice the diversity at −5.9%. Speed is equal. |
@@ -1229,7 +1403,7 @@ passed**, 2 known long-path failures.
 | 1 | Views ablation; multi-click training filter | **Done** (§6, §7) |
 | 2 | Relevance model: full-April popularity in LightGBM; position debias (LightGBM `position`); `lambdarank` vs `rank_xendcg`; RankNet MLP check; optional GRU4Rec feature; lower learning rate; scale to 50k and all queries | **Steps 1–2 done** (§6a: popularity, position, xendcg, learning rate; §6b: 50k queries). Left: all-data training (needs less memory per row or a larger machine); RankNet MLP check; optional GRU4Rec feature |
 | 3 | Filter: retrain two-tower on all data; compare with popularity filter using the Phase 2 ranker; choose K1 and whether never-shown products are allowed | Pending |
-| 4 | Diversity: fixed-alpha curve vs adaptive policies (session variety, query position, category switch); declared rule: most ILD within 5% NDCG loss | **Item page evaluated on validation** (§6e); fixed alpha 0.8 (K1 = 20) chosen and frozen 2026-11-08. **Home page evaluated on validation** (§6g); item-kNN + fixed alpha 0.8 chosen and frozen 2026-11-08 |
+| 4 | Diversity: fixed-alpha curve vs adaptive policies (session variety, query position, category switch); declared rule: most ILD within 5% NDCG loss | **Item page evaluated on validation** (§6e); fixed alpha 0.8 (K1 = 20) chosen and frozen 2026-11-08. **Home page evaluated on validation** (§6g); item-kNN + fixed alpha 0.8 chosen and frozen 2026-11-08, **replaced 2026-11-09 by SASRec + 6 + 4** (§6j, confirmed on selection) |
 | 5 | Choose on selection, freeze, evaluate confirmation; session-bootstrap intervals by segment | **All three pages frozen and evaluated on selection** (§6d, §6f, §6h). Confirmation week not opened yet |
 
 ### 8.0 Course requirements checklist (assessed 2026-11-08)
@@ -1238,7 +1412,7 @@ passed**, 2 known long-path failures.
 |---|---|---|---|
 | Well-defined user problem and objective | Research question (§3 of the handover), product brief (§8.1), per-page metrics | One consolidated statement for the report. The original "adaptive diversity" hypothesis was not supported (§3, §2), so the objective should read as relevance with controlled variety, with adaptation as a tested-and-rejected idea | Writing |
 | At least one classical baseline (CF, MF) | **Done 2026-11-08 (§6c): item-kNN on session co-clicks**, plus popularity sort and the site's order | Originally: no collaborative-filtering model under the current protocol. The older pipeline's session co-occurrence graph and GRU4Rec/SASRec used persistent-user features and another protocol. Needed: item-kNN on session co-clicks (also the "You may also like" model). MF needs a learned vector per user or session, which new anonymous sessions do not have; its item factors can still be used item-to-item | Build |
-| At least one neural or advanced model | Two-tower (neural, rank-weighted loss); LightGBM LambdaMART/xendcg (advanced) | Re-evaluate the two-tower under the final data choices (clicks only, 50k) in the same table as the other models | Small |
+| At least one neural or advanced model | **SASRec (transformer) adopted for the home page 2026-11-09 (§6j, selection +0.016 NDCG over item-kNN + fixed 0.8)**; GRU4Rec and the two-tower evaluated; LightGBM LambdaMART/xendcg (advanced) on category pages | Re-evaluate the two-tower under the final data choices (clicks only, 50k) in the same table as the other models | Small |
 | Rigorous offline evaluation (NDCG, Recall@K, MRR) | NDCG@10, Recall@10, **MRR@10 (added 2026-11-08, §6c)**, recall at K1, ILD, session-bootstrap intervals, segments; one table of site order, popularity, item-kNN and LightGBM on identical queries (§6c); **held-out selection table for category pages (§6d, 2026-11-08)** | Confirmation (final held-out test) still sealed until the other pages are frozen. Originally: **everything was validation-only:** selection and confirmation (Phase 5) are needed for a held-out result. No single table compares every model under one protocol | Build |
 | Error analysis of failure modes | **Done 2026-11-08 (§6i)** for all three pages on selection data. Earlier, scattered findings: cold queries tie popularity, text search fails, never-shown products unjudgeable, token ILD ceiling, hyperparameter sensitivity, category ID dominates splits | A systematic analysis of the final model: where it loses to popularity (categories, deep-ranked clicks, unpopular or new products, session length), with example lists | Build + writing |
 | Ethical analysis | **Done 2026-11-09 (§6k, `ETHICS.md`)**: exposure measured on all three pages; written section drafted. Originally: anonymous design (no user IDs); notes on position bias and click-only selection effect | Originally not written. Topics with measurable parts: popularity bias and exposure concentration (coverage, Gini of recommended products), position bias in logged clicks, privacy of the website's interaction logging, stakeholder impact (long-tail sellers, shoppers), AI-generated demo names | Measurement + writing |

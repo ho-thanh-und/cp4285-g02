@@ -13,6 +13,8 @@ from session_rerank.home_page import run_home_page
 from session_rerank.ymal import run_ymal
 from test_home_page import SETTINGS as HOME_SETTINGS
 from test_ymal import SETTINGS as YMAL_SETTINGS
+from session_rerank.sequence_models import run_sequence_models
+from test_sequence_models import SEQUENCE
 
 
 def test_gini_is_zero_for_equal_exposure_and_grows_with_concentration():
@@ -93,12 +95,23 @@ def test_home_and_item_lists_reproduce_the_selection_runs(tmp_path):
     ymal_selection.write_text(json.dumps(YMAL_SETTINGS | common | dict(window=selection,
                                                                        frozen_policy="fixed_0.8_4")))
     ymal_run = run_ymal(ymal_selection, output_root=tmp_path / "ymal")
+    # SASRec with 6 + 4, frozen on validation and scored on the selection cases.
+    sequence = SEQUENCE | dict(models=["sasrec"], diversity=True)
+    sequence_validation = tmp_path / "sequence.json"
+    sequence_validation.write_text(json.dumps(sequence | dict(home_config=str(home_validation),
+                                                              home_run=str(home_frozen))))
+    sequence_frozen = run_sequence_models(sequence_validation, output_root=tmp_path / "sequence")
+    sequence_selection = tmp_path / "sequence_selection.json"
+    sequence_selection.write_text(json.dumps(sequence | dict(
+        home_config=str(home_selection), home_run=str(home_run), frozen_run=str(sequence_frozen),
+        frozen_policy="six_four_sasrec")))
+    sequence_run = run_sequence_models(sequence_selection, output_root=tmp_path / "sequence_selection")
     settings = tmp_path / "exposure.json"
     settings.write_text(json.dumps(dict(
         output_directory="unused", raw_directory=str(raw), trained_run=str(run),
         popularity_window=dict(start="2016-04-01", end_exclusive="2016-04-30"), head_click_share=0.5,
         pages=["home", "item"], home_config=str(home_selection), home_run=str(home_run),
-        ymal_config=str(ymal_selection), ymal_run=str(ymal_run))))
+        ymal_config=str(ymal_selection), ymal_run=str(ymal_run), home_sequence_run=str(sequence_run))))
     output = run_exposure(settings, output_root=tmp_path / "exposure")
     summary = pd.read_csv(output / "summary.csv")
     assert set(summary.page) == {"home", "item"}
@@ -107,6 +120,8 @@ def test_home_and_item_lists_reproduce_the_selection_runs(tmp_path):
     shares = summary.head_share + summary.tail_share + summary.no_click_share
     assert np.allclose(shares, 1) and summary.coverage.between(0, 1).all()
     home = summary[summary.page.eq("home")].set_index("method")
+    # The sequence run's lists join the home page, and its frozen policy replaces item-kNN's.
+    assert {"sasrec", "six_four_sasrec"} <= set(home.index) and home.loc["six_four_sasrec", "frozen"]
     # Popularity shows the same few products to everyone: more concentrated than item-kNN.
     assert home.loc["popularity", "gini"] > home.loc["item_knn", "gini"]
     assert home.loc["popularity", "distinct_products"] < home.loc["item_knn", "distinct_products"]

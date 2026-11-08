@@ -16,6 +16,9 @@ Measures per page and method:
     received `head_click_share` of April clicks), on the rest of the products
     with April clicks (tail), and on products with no April clicks
   * median April clicks of the products shown
+Optional "home_sequence_run": a sequence-model run (SASRec / GRU4Rec) on the
+same home-page cases; its saved lists join the home page (checked against its
+saved NDCG) and its frozen policy, if any, becomes the home page's.
 Reference row "shopper_clicks": the products shoppers actually clicked later
 (the hits). head_share_ratio = a method's head share / the shoppers' head
 share; above 1 means the method concentrates on popular products more than
@@ -197,6 +200,22 @@ def category_lists(settings):
     return lists, clicked, frozen, candidates[candidates.query_id.isin(category)].item_id.unique(), heldout["trained_run"]
 
 
+def sequence_lists(run, item_index, targets, frozen):
+    """Saved SASRec / GRU4Rec home-page lists of a sequence run on the same cases.
+
+    The run's own frozen policy (if it has one) replaces the home page's frozen
+    policy, since that run's policy is the one the home page uses."""
+    run = Path(run)
+    shown = pd.read_parquet(run / "lists.parquet").sort_values(["method", "case", "position"])
+    lists = {method: [item_index.loc[group.item_id].to_numpy() for _, group in frame.groupby("case", sort=True)]
+             for method, frame in shown.groupby("method", sort=False)}
+    check_reproduced(lists, targets, pd.read_parquet(run / "per_case.parquet"), "case", "home (sequence models)")
+    choices = run / "frozen_choices.json"
+    if choices.exists():
+        frozen = json.loads(choices.read_text())["policy"] or frozen
+    return lists, frozen
+
+
 # -------------------------------------------------------------------- run ---
 
 def run_exposure(settings_path=Path("config/exposure.json"), output_root=None):
@@ -229,6 +248,9 @@ def run_exposure(settings_path=Path("config/exposure.json"), output_root=None):
             frames.append(page_summary(page, lists, clicked, len(listed), local_popularity, local_groups, frozen))
         else:
             lists, clicked, frozen, trained_run = home_lists(settings) if page == "home" else item_lists(settings)
+            if page == "home" and settings.get("home_sequence_run"):
+                extra, frozen = sequence_lists(settings["home_sequence_run"], item_index, clicked, frozen)
+                lists |= extra
             frames.append(page_summary(page, lists, clicked, len(products), popularity, groups, frozen))
         if trained_run != settings["trained_run"]:
             raise ValueError(f"The {page} run used another catalog ({trained_run})")

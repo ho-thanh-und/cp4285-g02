@@ -21,6 +21,16 @@ or more known clicks, sampled softmax against `negatives` shared products per
 batch (half uniform, half popularity-weighted; accidental hits are masked). The
 epoch with the best recall@10 on a fixed subset of the evaluation cases is kept,
 as for the session two-tower. A selection-week run reuses the saved models.
+
+Options:
+  * "diversity": true adds, for each model, the home page's fixed-alpha and 6 + 4
+    reorderings of its top `pool_size` products (fixed_<alpha>_<model>,
+    six_four_<model>), exactly as for item-kNN.
+  * "reuse_run": a finished validation run (e.g. a cluster grid setting) whose
+    saved models and vocabulary are scored again without training.
+  * "frozen_policy" / "frozen_reason": recorded in frozen_choices.json before the
+    selection week is opened.
+The shown lists are saved (lists.parquet) for exposure measurements.
 """
 
 import json
@@ -30,6 +40,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from .adaptive_policies import diverse_tail_order
+from .core import greedy_rerank
 from .diversity import ProductDiversity
 from .event_ablation import session_bootstrap
 from .home_page import click_sequences, evaluation_cases, read_home_settings
@@ -58,6 +70,15 @@ def read_sequence_settings(path):
     home = read_home_settings(settings["home_config"])
     if home["window"]["name"] == "selection" and not settings.get("frozen_run"):
         raise ValueError("The selection week needs frozen_run: the saved validation-week sequence models")
+    if settings.get("reuse_run") and (home["window"]["name"] != "validation" or settings.get("frozen_run")):
+        raise ValueError("reuse_run (score saved models without training) is for the validation week only")
+    # Optional: fixed-alpha and 6 + 4 reorderings of each model's top pool_size products.
+    names = set(settings["models"])
+    if settings.get("diversity"):
+        names |= {f"{kind}_{model}" for model in settings["models"]
+                  for kind in ["six_four"] + [f"fixed_{a:g}" for a in home["fixed_alphas"]]}
+    if settings.get("frozen_policy") is not None and settings["frozen_policy"] not in names:
+        raise ValueError(f"frozen_policy must be one of {sorted(names)}")
     # Optional longer training history; it must end before the evaluation weeks
     # (May), like every other model. Defaults to the home page's April window.
     window = settings.setdefault("training_window", home["training_window"])
@@ -161,18 +182,37 @@ def last_state(model, prefix_ids):
     return hidden[0, -1].cpu().numpy()
 
 
-def recommend(model, prefix_rows, vocab, ids_to_rows, fallback_rows, settings, k, weights=None):
-    """Top-k product rows for one case; popularity fallback when no click is known."""
+def ranked(model, prefix_rows, vocab, ids_to_rows, fallback_rows, settings, count, weights=None):
+    """Top `count` product rows for one case with their scores, best first, and whether
+    the session was used (False: no known click, so the popularity order is returned)."""
     known = [int(vocab[r]) for r in prefix_rows if r in vocab.index][-settings["max_length"]:]
     exclude = set(prefix_rows)
     if not known:
-        return np.array([r for r in fallback_rows[:k + len(exclude)] if r not in exclude][:k]), False
+        rows = np.array([r for r in fallback_rows[:count + len(exclude)] if r not in exclude][:count])
+        return rows, -np.arange(len(rows), dtype=float), False
     weights = item_weights(model) if weights is None else weights
     scores = weights[1:] @ last_state(model, known)
-    order = np.argpartition(-scores, k + len(exclude))[:k + len(exclude)]
+    order = np.argpartition(-scores, count + len(exclude))[:count + len(exclude)]
     order = order[np.argsort(-scores[order], kind="stable")]
-    rows = [int(ids_to_rows[i + 1]) for i in order]
-    return np.array([r for r in rows if r not in exclude][:k]), True
+    kept = [(int(ids_to_rows[i + 1]), float(scores[i])) for i in order if int(ids_to_rows[i + 1]) not in exclude]
+    kept = kept[:count]
+    return np.array([r for r, _ in kept]), np.array([s for _, s in kept]), True
+
+
+def recommend(model, prefix_rows, vocab, ids_to_rows, fallback_rows, settings, k, weights=None):
+    """Top-k product rows for one case; popularity fallback when no click is known."""
+    rows, _, personal = ranked(model, prefix_rows, vocab, ids_to_rows, fallback_rows, settings, k, weights)
+    return rows, personal
+
+
+def diverse_lists(rows, scores, diversity, catalog_ids, home):
+    """Fixed-alpha and 6 + 4 reorderings of a model's pool, as for item-kNN on the home page."""
+    k, slots = home["top_k"], home["relevance_slots"]
+    reward = np.nan_to_num(diversity.distances(catalog_ids[rows].tolist())["combined"], nan=0.0)
+    lists = {"six_four": rows[diverse_tail_order(scores, reward, slots, k)]}
+    for alpha in home["fixed_alphas"]:
+        lists[f"fixed_{alpha:g}"] = rows[greedy_rerank(scores, reward, alpha, k)]
+    return lists
 
 
 def train(kind, sequences, vocab, settings, check_cases, ids_to_rows, fallback_rows, k):
@@ -237,27 +277,35 @@ def run_sequence_models(settings_path=Path("config/sequence_models.json"), outpu
     folder = Path(output_root or settings["output_directory"]) / f"{stamp}_{window['name']}"
     folder.mkdir(parents=True)
     selection = window["name"] == "selection"
+    # Saved models to score without training: the frozen run on the selection
+    # week, or (optional) an earlier validation run such as a cluster grid run.
+    source = Path(settings["frozen_run"]) if selection else (
+        Path(settings["reuse_run"]) if settings.get("reuse_run") else None)
     if selection:
         from .heldout import git_state
-        frozen = Path(settings["frozen_run"])
         write_json(folder / "frozen_choices.json", dict(
             frozen_at_utc=datetime.now(timezone.utc).isoformat(), code=git_state(Path.cwd()),
-            page="home page (comparison models)", models={m: str(frozen / f"{m}.pt") for m in settings["models"]},
-            settings=str(frozen / "sequence_settings.json"), heldout_week=window))
+            page="home page", policy=settings.get("frozen_policy"), reason=settings.get("frozen_reason"),
+            models={m: str(source / f"{m}.pt") for m in settings["models"]},
+            settings=str(source / "sequence_settings.json"), heldout_week=window))
         print("[sequence] Frozen models recorded before opening the week", flush=True)
     products = pd.read_parquet(Path(home["trained_run"]) / "products.parquet")
     item_index = pd.Series(np.arange(len(products)), index=products.item_id.to_numpy())
     catalog_ids = products.item_id.to_numpy()
     categories = products.category_id.fillna(-1).to_numpy(np.int64)
     diversity = ProductDiversity(products)
-    print(f"[sequence] Click sequences {settings['training_window']}", flush=True)
-    train_window = settings["training_window"]
-    april = click_sequences(home["raw_directory"], train_window["start"], train_window["end_exclusive"], item_index)
-    if selection:
-        saved = json.loads((frozen / "sequence_settings.json").read_text())
-        vocab_rows = np.load(frozen / "vocabulary_rows.npy")
-        vocab = pd.Series(np.arange(1, len(vocab_rows) + 1), index=vocab_rows)
+    if source:
+        saved = json.loads((source / "sequence_settings.json").read_text())
         model_settings = saved["settings"]
+        if set(settings["models"]) - set(model_settings["models"]):
+            raise ValueError(f"{source} has no saved model for {settings['models']}")
+    train_window = model_settings["training_window"] if source else settings["training_window"]
+    print(f"[sequence] Click sequences {train_window}", flush=True)
+    april = click_sequences(home["raw_directory"], train_window["start"], train_window["end_exclusive"], item_index)
+    if source:
+        vocab_rows = np.load(source / "vocabulary_rows.npy")
+        vocab = pd.Series(np.arange(1, len(vocab_rows) + 1), index=vocab_rows)
+        np.save(folder / "vocabulary_rows.npy", vocab_rows)
     else:
         vocab = vocabulary(april)
         model_settings = settings
@@ -281,11 +329,13 @@ def run_sequence_models(settings_path=Path("config/sequence_models.json"), outpu
     print(f"[sequence] device: {device}", flush=True)
     for kind in settings["models"]:
         model = build_model(kind, len(vocab), model_settings)
-        if selection:
-            model.load_state_dict(torch.load(frozen / f"{kind}.pt", map_location=device))
+        if source:
+            model.load_state_dict(torch.load(source / f"{kind}.pt", map_location=device))
             model = model.to(device)
             model.eval()
-            training[kind] = dict(reused=str(frozen), device=device)
+            torch.save({key: value.cpu() for key, value in model.state_dict().items()}, folder / f"{kind}.pt")
+            training[kind] = dict(reused=str(source), device=device,
+                                  best_epoch=saved["training"].get(kind, {}).get("best_epoch"))
         else:
             check = cases[:: max(1, len(cases) // settings["epoch_check_cases"])][:settings["epoch_check_cases"]]
             model, log, training[kind] = train(kind, april, vocab, settings, check, ids_to_rows, fallback_rows, k)
@@ -294,18 +344,28 @@ def run_sequence_models(settings_path=Path("config/sequence_models.json"), outpu
             torch.save({key: value.cpu() for key, value in model.state_dict().items()}, folder / f"{kind}.pt")
         models[kind] = model
     weights = {kind: item_weights(model) for kind, model in models.items()}
-    rows = []
+    pool = max(k, home["pool_size"]) if settings.get("diversity") else k
+    rows, shown = [], []
     for number, (key, prefix, later) in enumerate(cases):
         for kind, model in models.items():
-            top, personal = recommend(model, prefix, vocab, ids_to_rows, fallback_rows, model_settings, k,
-                                      weights[kind])
-            rows.append(dict(session_key=key, clicked_so_far=len(prefix), targets=len(later), method=kind,
-                             case=number, used_session=personal,
-                             targets_in_vocabulary=bool(set(later) & set(vocab.index)),
-                             **list_metrics(top, later, prefix[-1], catalog_ids, categories, diversity, slots)))
+            members, scores, personal = ranked(model, prefix, vocab, ids_to_rows, fallback_rows, model_settings,
+                                               pool, weights[kind])
+            lists = {kind: members[:k]}
+            if settings.get("diversity"):
+                lists |= {f"{name}_{kind}": top for name, top in
+                          diverse_lists(members, scores, diversity, catalog_ids, home).items()}
+            for method, top in lists.items():
+                rows.append(dict(session_key=key, clicked_so_far=len(prefix), targets=len(later), method=method,
+                                 case=number, used_session=personal,
+                                 targets_in_vocabulary=bool(set(later) & set(vocab.index)),
+                                 **list_metrics(top, later, prefix[-1], catalog_ids, categories, diversity, slots)))
+                shown.append((number, method, catalog_ids[top]))
         if (number + 1) % 2000 == 0 or number + 1 == len(cases):
             print(f"[sequence] {number + 1:,}/{len(cases):,} cases", flush=True)
     ours = pd.DataFrame(rows)
+    # The shown lists themselves, for exposure measurements.
+    shown = pd.DataFrame([dict(case=c, method=m, position=p + 1, item_id=int(i))
+                          for c, m, items in shown for p, i in enumerate(items)])
     combined = pd.concat([saved_cases[saved_cases.method.isin(["popularity", "item_knn", "two_tower",
                                                                "fixed_0.8_item_knn"])], ours], ignore_index=True)
     combined["clicks_so_far"] = pd.cut(combined.clicked_so_far, [0, 1, 2, 5, np.inf], labels=["1", "2", "3-5", "6+"])
@@ -317,21 +377,22 @@ def run_sequence_models(settings_path=Path("config/sequence_models.json"), outpu
     differences = []
     for reference_method in ("item_knn", "fixed_0.8_item_knn", "two_tower"):
         base = combined[combined.method.eq(reference_method)].set_index("case")
-        for kind in settings["models"]:
-            other = combined[combined.method.eq(kind)].set_index("case").reindex(base.index)
+        for method in ours.method.unique():
+            other = combined[combined.method.eq(method)].set_index("case").reindex(base.index)
             for metric in RELEVANCE + ["combined_ild"]:
                 diff = other[metric] - base[metric]
                 low, high = session_bootstrap(diff, base.session_key, settings["bootstrap_replicates"], rng)
-                differences.append(dict(method=kind, reference=reference_method, metric=metric,
+                differences.append(dict(method=method, reference=reference_method, metric=metric,
                                         value=float(other[metric].mean()), reference_value=float(base[metric].mean()),
                                         difference=float(diff.mean()), ci_low=low, ci_high=high))
     write_json(folder / "sequence_settings.json", dict(
-        settings=model_settings if selection else settings, home=home, training=training,
+        settings=model_settings if source else settings, run_settings=settings, home=home, training=training,
         vocabulary=int(len(vocab)), evaluable_cases=total, evaluated_cases=len(cases),
         cases_without_known_click=float(1 - ours.used_session.mean()),
         cases_with_a_predictable_target=float(ours.targets_in_vocabulary.mean())))
     save_table(pd.DataFrame(logs), folder / "training_log.csv")
     save_table(ours, folder / "per_case.parquet")
+    save_table(shown, folder / "lists.parquet")
     save_table(summary, folder / "summary.csv")
     save_table(pd.DataFrame(differences), folder / "differences.csv")
     print(f"[sequence] Saved to {folder}", flush=True)

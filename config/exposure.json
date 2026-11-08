@@ -7,6 +7,7 @@
   "pages": ["home", "item", "category"],
   "home_config": "config/home_page_selection.json",
   "home_run": "results/home_page/20261108T102455Z_selection",
+  "home_sequence_run": "results/sequence_models/20261108T182139Z_selection",
   "ymal_config": "config/ymal_selection.json",
   "ymal_run": "results/ymal/20261108T092942Z_selection",
   "heldout_config": "config/heldout.json",
