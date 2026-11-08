@@ -1073,6 +1073,19 @@ tested, because the library cannot be installed on the laptop, so it has a
 `--smoke` mode for a first check on the cluster. `scripts/t4rec/t4rec.slurm` runs
 all three steps; `scripts/t4rec/T4REC_GUIDE.md` has the instructions.
 
+**GPU jobs (2026-11-08).** At the user's request, two Slurm scripts use the NUS
+`gpu` partition header (`--gpus=h100-96:1`): `scripts/cluster/sequence_grid_gpu.sh`
+runs the 12 grid settings one after another on one GPU (skipping finished ones),
+and `scripts/t4rec/t4rec_gpu.sh` runs the three Transformers4Rec steps. Both stop
+early if PyTorch cannot see the GPU. Any GPU type suffices (the models need
+well under 2 GB of GPU memory). The sequence models now train on the GPU when
+one is visible (`device`: `auto`, `cpu`, `cuda`) and save CPU-loadable weights;
+only the CPU path is tested here. The CUDA builds of torch are a one-time
+replacement described in the guides. The guides also record the first install
+problems on the cluster: Python 3.11 was only available from `conda-forge`, the
+home-directory disk quota was exceeded, and a batch job that did not activate
+the environment ran pip in the `base` environment (Python 3.13).
+
 ---
 
 ## 7. Decisions

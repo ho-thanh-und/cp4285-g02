@@ -60,13 +60,28 @@ bash Miniconda3-latest-Linux-x86_64.sh -b -p "$HOME/miniconda3"
 source "$HOME/miniconda3/etc/profile.d/conda.sh"
 ```
 
-Create the environment and install the packages:
+Create the environment and install the packages. Use the `conda-forge`
+channel: on the NUS cluster the `defaults` channel did not offer Python 3.11.
+The `&&` stops the chain if a step fails, so pip never installs into the wrong
+Python:
 
 ```bash
-conda create -n cp4285 python=3.11 -y
-conda activate cp4285
-python -m pip install -r requirements.txt
+conda create -n cp4285 -c conda-forge --override-channels python=3.11 -y && conda activate cp4285 && python --version && python -m pip install --no-cache-dir -r requirements.txt
 ```
+
+`python --version` must print `Python 3.11.x`. Install on the login node, not in
+a batch job: a batch job starts a fresh shell that may run the `base`
+environment (Python 3.13), where pyarrow 14.0.2 has no ready-made package and
+fails to build. Any batch script you write must itself run
+`source ~/miniconda3/etc/profile.d/conda.sh` and `conda activate cp4285`, as the
+project's job scripts do.
+
+**Disk quota.** The environment needs about 1 GB with CPU torch (about 3 GB with
+the CUDA build) and the copied data about 0.9 GB. Check with `quota -s`; clear
+caches with `conda clean --all -y` and `rm -rf ~/.cache/pip`. If the home quota
+is too small, create the environment on scratch storage with
+`conda create -p /path/to/scratch/envs/cp4285 ...` and submit with
+`--export=ALL,CONDA_ENV=/path/to/scratch/envs/cp4285`.
 
 The job scripts activate `cp4285` from `~/miniconda3`. If Miniconda lives
 elsewhere or the environment has another name, set them when submitting, e.g.
@@ -89,12 +104,24 @@ The check must print `Ready.` before you submit.
 ## 5. Submit
 
 Open the job script, set the partition/queue and account lines if your cluster
-requires them, and keep `--cpus-per-task` equal to `--threads` above.
+requires them, and keep `--cpus-per-task` equal to `--threads` above. The CPU
+scripts write their logs to `logs/`, which must exist before submitting
+(Slurm opens the log file before the script starts):
 
-Slurm:
+```bash
+mkdir -p logs
+```
+
+Slurm (12 CPU tasks in parallel):
 
 ```bash
 sbatch scripts/cluster/sequence_grid.slurm
+```
+
+Slurm on one GPU (all 12 settings one after another; see "Using a GPU" below):
+
+```bash
+sbatch scripts/cluster/sequence_grid_gpu.sh
 ```
 
 PBS:
@@ -124,3 +151,31 @@ rsync -av USER@CLUSTER:cp4285-g02/results/sequence_grid/ results/sequence_grid/
 ```
 
 Then record the outcome in EXPERIMENT_LOG.md.
+
+## Using a GPU
+
+`scripts/cluster/sequence_grid_gpu.sh` runs all 12 settings on one GPU (the
+header uses the NUS `gpu` partition and `--gpus=TYPE:1`). Any GPU type is
+enough: the models need well under 2 GB of GPU memory, so a smaller type than
+`h100-96` usually starts sooner (`sinfo -o "%P %G"` lists the types). The models
+train on the GPU automatically when PyTorch can see one (`device` in the config:
+`auto`, `cpu` or `cuda`); scoring the 20,000 cases still runs on the CPU.
+
+`requirements.txt` installs the CPU build of torch. For the GPU, replace it once
+with the CUDA build of the same version (about 2.5 GB more; mind the quota):
+
+```bash
+conda activate cp4285
+```
+
+```bash
+python -m pip uninstall -y torch
+```
+
+```bash
+python -m pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu124 torch==2.5.1
+```
+
+The job checks this first and stops with a message if PyTorch cannot see the
+GPU, so no GPU time is wasted. Its log is `seq_grid_gpu_JOBID.out` in the
+repository root, and it ends by running the collector.

@@ -51,6 +51,8 @@ def read_sequence_settings(path):
             raise ValueError(f"{name} must be a positive integer")
     if settings["embedding_dim"] % settings["sasrec_heads"]:
         raise ValueError("embedding_dim must be divisible by sasrec_heads")
+    if settings.get("device", "auto") not in ("auto", "cpu", "cuda"):
+        raise ValueError("device must be auto, cpu or cuda")
     if not 0 <= settings["popular_negative_share"] <= 1 or not 0 <= settings["dropout"] < 1:
         raise ValueError("popular_negative_share must be in [0, 1] and dropout in [0, 1)")
     home = read_home_settings(settings["home_config"])
@@ -133,21 +135,38 @@ def build_model(kind, products, settings):
     return model
 
 
+def choose_device(settings):
+    """'auto' (default) uses a GPU when one is visible, otherwise the CPU."""
+    import torch
+    wanted = settings.get("device", "auto")
+    if wanted == "auto":
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    if wanted == "cuda" and not torch.cuda.is_available():
+        raise ValueError("device is 'cuda' but no GPU is visible")
+    return wanted
+
+
+def item_weights(model):
+    """Product vectors as a CPU array, computed once per scoring pass."""
+    return model.items.weight.detach().cpu().numpy()
+
+
 def last_state(model, prefix_ids):
     """Session state after the last known click (one session)."""
     import torch
+    device = next(model.parameters()).device
     with torch.no_grad():
-        hidden = model(torch.as_tensor([prefix_ids]))
-    return hidden[0, -1].numpy()
+        hidden = model(torch.as_tensor([prefix_ids], device=device))
+    return hidden[0, -1].cpu().numpy()
 
 
-def recommend(model, prefix_rows, vocab, ids_to_rows, fallback_rows, settings, k):
+def recommend(model, prefix_rows, vocab, ids_to_rows, fallback_rows, settings, k, weights=None):
     """Top-k product rows for one case; popularity fallback when no click is known."""
     known = [int(vocab[r]) for r in prefix_rows if r in vocab.index][-settings["max_length"]:]
     exclude = set(prefix_rows)
     if not known:
         return np.array([r for r in fallback_rows[:k + len(exclude)] if r not in exclude][:k]), False
-    weights = model.items.weight.detach().numpy()
+    weights = item_weights(model) if weights is None else weights
     scores = weights[1:] @ last_state(model, known)
     order = np.argpartition(-scores, k + len(exclude))[:k + len(exclude)]
     order = order[np.argsort(-scores[order], kind="stable")]
@@ -161,7 +180,8 @@ def train(kind, sequences, vocab, settings, check_cases, ids_to_rows, fallback_r
     torch.set_num_threads(settings["threads"])
     rng = np.random.default_rng(settings["seed"])
     inputs, targets = training_batches(sequences, vocab, settings["max_length"])
-    model = build_model(kind, len(vocab), settings)
+    device = choose_device(settings)
+    model = build_model(kind, len(vocab), settings).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=settings["learning_rate"])
     counts = np.bincount(targets[targets > 0], minlength=len(vocab) + 1)[1:].astype(float) + 1
     popular = counts ** settings["popular_negative_power"]
@@ -174,25 +194,27 @@ def train(kind, sequences, vocab, settings, check_cases, ids_to_rows, fallback_r
         total, steps = 0.0, 0
         for start in range(0, len(order), settings["batch_size"]):
             batch = order[start:start + settings["batch_size"]]
-            x, y = torch.as_tensor(inputs[batch]), torch.as_tensor(targets[batch])
+            x = torch.as_tensor(inputs[batch], device=device)
+            y = torch.as_tensor(targets[batch], device=device)
             valid = y > 0
             hidden = model(x)[valid]
             target = y[valid]
             negatives = torch.as_tensor(np.concatenate([
                 rng.integers(1, len(vocab) + 1, settings["negatives"] - n_popular),
-                rng.choice(len(vocab), n_popular, p=popular) + 1]))
+                rng.choice(len(vocab), n_popular, p=popular) + 1]), device=device)
             positive = (hidden * model.items(target)).sum(-1, keepdim=True)
             negative = hidden @ model.items(negatives).T
             negative = negative.masked_fill(negatives.unsqueeze(0) == target.unsqueeze(1), float("-inf"))
             loss = torch.nn.functional.cross_entropy(torch.cat([positive, negative], 1),
-                                                     torch.zeros(len(target), dtype=torch.long))
+                                                     torch.zeros(len(target), dtype=torch.long, device=device))
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
             total, steps = total + float(loss), steps + 1
         model.eval()
+        weights = item_weights(model)
         recall = np.mean([len(targets_ & set(recommend(model, prefix, vocab, ids_to_rows, fallback_rows,
-                                                         settings, k)[0].tolist())) / len(targets_)
+                                                         settings, k, weights)[0].tolist())) / len(targets_)
                           for _, prefix, targets_ in check_cases])
         log.append(dict(model=kind, epoch=epoch, loss=total / steps, check_recall_at_10=float(recall)))
         print(f"[{kind}] epoch {epoch}: loss {total / steps:.4f}, check recall@10 {recall:.4f}", flush=True)
@@ -201,7 +223,7 @@ def train(kind, sequences, vocab, settings, check_cases, ids_to_rows, fallback_r
     model.load_state_dict(best[1])
     model.eval()
     return model, log, dict(training_sessions=int(len(inputs)), training_positions=int((targets > 0).sum()),
-                            best_epoch=best[2])
+                            best_epoch=best[2], device=device)
 
 
 # --------------------------------------------------------------- evaluation ---
@@ -254,22 +276,28 @@ def run_sequence_models(settings_path=Path("config/sequence_models.json"), outpu
         raise ValueError("These cases do not match the saved home-page run")
     k, slots = home["top_k"], home["relevance_slots"]
     models, logs, training = {}, [], {}
+    device = choose_device(settings)
+    print(f"[sequence] device: {device}", flush=True)
     for kind in settings["models"]:
         model = build_model(kind, len(vocab), model_settings)
         if selection:
-            model.load_state_dict(torch.load(frozen / f"{kind}.pt"))
+            model.load_state_dict(torch.load(frozen / f"{kind}.pt", map_location=device))
+            model = model.to(device)
             model.eval()
-            training[kind] = dict(reused=str(frozen))
+            training[kind] = dict(reused=str(frozen), device=device)
         else:
             check = cases[:: max(1, len(cases) // settings["epoch_check_cases"])][:settings["epoch_check_cases"]]
             model, log, training[kind] = train(kind, april, vocab, settings, check, ids_to_rows, fallback_rows, k)
             logs.extend(log)
-            torch.save(model.state_dict(), folder / f"{kind}.pt")
+            # Saved as CPU tensors so a GPU-trained model also loads on a laptop.
+            torch.save({key: value.cpu() for key, value in model.state_dict().items()}, folder / f"{kind}.pt")
         models[kind] = model
+    weights = {kind: item_weights(model) for kind, model in models.items()}
     rows = []
     for number, (key, prefix, later) in enumerate(cases):
         for kind, model in models.items():
-            top, personal = recommend(model, prefix, vocab, ids_to_rows, fallback_rows, model_settings, k)
+            top, personal = recommend(model, prefix, vocab, ids_to_rows, fallback_rows, model_settings, k,
+                                      weights[kind])
             rows.append(dict(session_key=key, clicked_so_far=len(prefix), targets=len(later), method=kind,
                              case=number, used_session=personal,
                              targets_in_vocabulary=bool(set(later) & set(vocab.index)),

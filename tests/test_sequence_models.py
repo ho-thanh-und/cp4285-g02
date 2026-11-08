@@ -58,6 +58,19 @@ def test_training_window_must_end_before_the_evaluation_weeks(tmp_path, window, 
             read_sequence_settings(path)
 
 
+def test_device_setting_is_checked_and_auto_falls_back_to_cpu(tmp_path):
+    from session_rerank.sequence_models import choose_device
+    home = tmp_path / "home.json"
+    home.write_text(json.dumps(HOME_SETTINGS))
+    path = tmp_path / "sequence.json"
+    path.write_text(json.dumps(SEQUENCE | dict(home_config=str(home), device="tpu")))
+    with pytest.raises(ValueError, match="device"):
+        read_sequence_settings(path)
+    expected = "cuda" if torch.cuda.is_available() else "cpu"
+    assert choose_device({"device": "auto"}) == expected and choose_device({}) == expected
+    assert choose_device({"device": "cpu"}) == "cpu"
+
+
 def test_selection_needs_frozen_models(tmp_path):
     home = tmp_path / "home.json"
     home.write_text(json.dumps(HOME_SETTINGS | dict(window=dict(name="selection", start="2016-05-09",

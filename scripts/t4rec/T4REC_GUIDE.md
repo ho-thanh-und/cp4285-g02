@@ -31,16 +31,11 @@ the two result files, Miniconda and the `cp4285` environment.
 
 ## 2. Create the Transformers4Rec environment
 
-```bash
-conda create -n cp4285-t4r python=3.10 -y
-```
+On the login node (not in a batch job), using `conda-forge` and stopping if any
+step fails; `python --version` must print `Python 3.10.x`:
 
 ```bash
-conda activate cp4285-t4r
-```
-
-```bash
-python -m pip install -r scripts/t4rec/requirements-t4rec.txt
+conda create -n cp4285-t4r -c conda-forge --override-channels python=3.10 -y && conda activate cp4285-t4r && python --version && python -m pip install --no-cache-dir -r scripts/t4rec/requirements-t4rec.txt
 ```
 
 Check that it imports:
@@ -50,8 +45,8 @@ python -c "import transformers4rec.torch as tr; from merlin.schema import Schema
 ```
 
 If pip reports a version conflict, keep the pins for `transformers4rec`,
-`merlin-*`, `pandas` and `transformers` and relax the others. For a GPU, delete
-the `--extra-index-url` line in the requirements file before installing.
+`merlin-*`, `pandas` and `transformers` and relax the others. For a GPU, see
+"Using a GPU" below.
 
 ## 3. Smoke test
 
@@ -74,10 +69,18 @@ conda activate cp4285-t4r
 python scripts/t4rec/train_t4rec.py --export "$(cat results/t4rec/latest_export.txt)" --smoke
 ```
 
-Or as a job:
+Or as a job, on CPU (create `logs/` first) or on a GPU:
+
+```bash
+mkdir -p logs
+```
 
 ```bash
 sbatch --export=ALL,SMOKE=1 scripts/t4rec/t4rec.slurm
+```
+
+```bash
+sbatch --export=ALL,SMOKE=1 scripts/t4rec/t4rec_gpu.sh
 ```
 
 It should end with `wrote predictions_smoke.parquet`. If it fails inside the
@@ -85,16 +88,44 @@ library, the traceback points to the call to adjust.
 
 ## 4. Full run
 
-Set the partition/account lines in `scripts/t4rec/t4rec.slurm` if needed (and
-`--gres=gpu:1` for a GPU), then:
+On a GPU (recommended; NUS `gpu` partition header):
+
+```bash
+sbatch scripts/t4rec/t4rec_gpu.sh
+```
+
+Or on CPU only (set the partition/account lines in `t4rec.slurm` if needed):
 
 ```bash
 sbatch scripts/t4rec/t4rec.slurm
 ```
 
 The job runs all three steps, switching environments (`CONDA_ENV`, default
-`cp4285`; `T4REC_ENV`, default `cp4285-t4r`). The log in `logs/` shows one line
-per epoch and, at the end, the scored NDCG@10 and recall@10.
+`cp4285`; `T4REC_ENV`, default `cp4285-t4r`). The log (`t4rec_gpu_JOBID.out` in
+the repository root, or `logs/` for the CPU script) shows one line per epoch
+and, at the end, the scored NDCG@10 and recall@10.
+
+## Using a GPU
+
+`requirements-t4rec.txt` installs the CPU build of torch 2.1.2. For a GPU,
+replace it once with the CUDA 12.1 build of the same version (about 2.5 GB
+more; mind the disk quota):
+
+```bash
+conda activate cp4285-t4r
+```
+
+```bash
+python -m pip uninstall -y torch
+```
+
+```bash
+python -m pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu121 torch==2.1.2
+```
+
+Any GPU type works (this model needs a few GB at most), so a smaller type than
+`h100-96` usually starts sooner. `t4rec_gpu.sh` stops with a message if torch in
+this environment cannot see the GPU.
 
 ## 5. Results
 
