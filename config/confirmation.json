@@ -1,0 +1,7 @@
+{
+  "output_directory": "results/confirmation",
+  "heldout_config": "config/heldout_confirmation.json",
+  "ymal_config": "config/ymal_confirmation.json",
+  "home_config": "config/home_page_confirmation.json",
+  "sequence_config": "config/sequence_home_confirmation.json"
+}

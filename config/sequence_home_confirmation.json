@@ -1,0 +1,33 @@
+{
+  "output_directory": "results/sequence_models",
+  "home_config": "config/home_page_confirmation.json",
+  "home_run": "filled in by the confirmation run",
+  "frozen_run": "results/sequence_models/20261108T175008Z_validation",
+  "frozen_policy": "six_four_sasrec",
+  "frozen_reason": "Chosen by the user on 2026-11-09 from validation (EXPERIMENT_LOG.md 6j): best of a 12-setting SASRec/GRU4Rec grid on February-April (SASRec dim 64, 2 blocks, dropout 0.5, epoch 9); the declared rule (most ILD within 5% NDCG loss) picks 6 + 4 over the top 20 (-3.6% NDCG, +0.041 ILD). Replaces item-kNN + fixed 0.8 on the home page.",
+  "diversity": true,
+  "models": [
+    "sasrec"
+  ],
+  "max_length": 20,
+  "embedding_dim": 64,
+  "sasrec_blocks": 2,
+  "sasrec_heads": 2,
+  "dropout": 0.5,
+  "epochs": 30,
+  "batch_size": 128,
+  "learning_rate": 0.001,
+  "negatives": 2000,
+  "popular_negative_share": 0.5,
+  "popular_negative_power": 0.75,
+  "epoch_check_cases": 3000,
+  "bootstrap_replicates": 2000,
+  "seed": 4285,
+  "threads": 4,
+  "embedding_init_std": 0.02,
+  "device": "cpu",
+  "training_window": {
+    "start": "2016-02-01",
+    "end_exclusive": "2016-04-30"
+  }
+}

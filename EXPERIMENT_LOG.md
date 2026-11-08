@@ -1364,6 +1364,95 @@ Also: pytest's default temporary folder is blocked in this environment, so
 tests now run with `--basetemp` in the session scratchpad. Full suite: **203
 passed**, 2 known long-path failures.
 
+## 6l. Confirmation: the final test (May 16 – June 1, 2026-11-09)
+
+**Decision (user, 2026-11-09).** The confirmation week is the whole period
+May 16 – June 1. It is opened once, after all three pages are frozen.
+
+**Code.**
+- `src/session_rerank/windows.py`: the three weeks, and a rule that each page
+  scores the confirmation week only once. A run that stopped before writing
+  its results does not count as opened.
+- The pages accept the confirmation week only with a frozen choice:
+  - `ymal`, `home_page` and `sequence_models` need a frozen policy;
+  - `heldout` needs `frozen_selection_run`, reports the model chosen on
+    selection, and does not apply the selection rule again.
+- `uv run main.py confirmation` (`src/session_rerank/confirmation.py`,
+  `config/confirmation.json` and four page configs `*_confirmation.json`):
+  1. checks every page config;
+  2. writes `frozen_choices.json` with all three choices, the commit and the
+     uncommitted code (`code.diff`, including new files);
+  3. runs the pages;
+  4. writes `final_table.csv`.
+- Tests: `tests/test_confirmation.py` and an updated `tests/test_heldout.py`.
+  Full suite: 215 passed, plus the 2 known failures.
+
+**Run.** `results/confirmation/20261108T193024Z_confirmation`. The choices were
+frozen at 19:30:25 UTC.
+
+The first attempt stopped before scoring anything. The category-page check
+compared the rebuilt confirmation queries with the wrong reservation file: the
+pilot keeps them in `confirmation_ids.parquet`, not `queries.parquet`. All
+1,000 rebuilt IDs match that file. After the fix, the run resumed in the same
+folder with the same frozen choices, and the fixed code was recorded as
+`code_resumed_20261108T193305Z.diff`. Each page was scored once:
+
+| Page | Run | Size |
+|---|---|---|
+| Category pages | `results/heldout/20261108T193305Z_confirmation` | 1,000 queries (939 category pages with a later click) |
+| Item page | `results/ymal/20261108T193505Z_confirmation` | 20,000 of 72,798 evaluable item pages |
+| Home page cases | `results/home_page/20261108T194937Z_confirmation` | 20,000 of 72,798 evaluable cases |
+| Home page SASRec | `results/sequence_models/20261108T200822Z_confirmation` | same cases |
+
+**Final results** (95% session-bootstrap intervals):
+
+| Page | Frozen choice | NDCG@10 | Baseline | Difference (95% CI) | Other metrics |
+|---|---|---:|---|---|---|
+| Category pages | LightGBM purchase_session | **0.184** | popularity sort 0.167 | **+0.018 (+0.005, +0.032)** | Recall@10 +0.023 (+0.005, +0.042); MRR +0.019 (+0.004, +0.033) |
+| | | | item-kNN 0.162 | +0.023 (+0.010, +0.037) | site order 0.058 |
+| Item page | item-kNN + fixed 0.8, K1 = 20 | **0.095** | category popularity 0.093 | +0.003 (−0.001, +0.006): **tie** | MRR +0.008 (+0.003, +0.013); recall −0.002 (−0.006, +0.003); ILD **+0.176** |
+| | | | item-kNN relevance only 0.099 | −0.003 (−3.3%) | ILD +0.032 |
+| Home page | SASRec + 6 + 4 | **0.111** | item-kNN + fixed 0.8 0.098 | **+0.014 (+0.010, +0.017)**, +14% | Recall +0.020; MRR +0.017; ILD −0.109 |
+| | | | item-kNN 0.101 | +0.011 (+0.007, +0.014) | |
+| | | | two-tower 0.090 | +0.021 (+0.017, +0.025) | popularity 0.003 |
+
+**Reading.**
+- **Category pages: confirmed.** The LightGBM ranker beats the popularity sort
+  and item-kNN, with intervals above zero. Its gain over popularity is smaller
+  than on selection (+0.018 vs +0.029). The purchase_session model again edged
+  out click_session (0.184 vs 0.182).
+- **Home page: confirmed.** SASRec + 6 + 4 beats every other method, by about
+  the same margin as on selection (+0.014 vs +0.016 over item-kNN + fixed
+  0.8). It wins in every history segment:
+
+  | Clicks so far | 1 | 2 | 3–5 | 6+ |
+  |---|---:|---:|---:|---:|
+  | SASRec + 6 + 4 | 0.121 | 0.117 | 0.110 | 0.096 |
+  | item-kNN + fixed 0.8 | 0.102 | 0.105 | 0.102 | 0.082 |
+
+  It is less diverse (ILD 0.564 vs 0.673; 2.0 vs 3.0 categories). 3.9% of cases
+  fall back to popularity, because no click is in SASRec's vocabulary.
+- **Item page: a tie on accuracy, a clear gain in variety.** The diverse
+  item-kNN list's NDCG lead over category popularity was always small:
+
+  | Week | NDCG lead (95% CI) |
+  |---|---|
+  | validation | +0.005 (+0.001, +0.010) |
+  | selection | +0.007 (+0.003, +0.011) |
+  | confirmation | +0.003 (−0.001, +0.006) |
+
+  On confirmation that lead is no longer distinguishable from zero. It still
+  ranks the first click higher (MRR +0.008, interval above zero) and is far
+  more varied (ILD 0.635 vs 0.458; 2.6 vs 1.0 categories). Relevance-only
+  item-kNN still beats category popularity (+0.006, +0.003 to +0.009). The
+  diversity step costs that margin, as the 5% rule allowed (−3.3% here,
+  −4.0% on validation).
+- Each page's diversity cost is about the same as on validation and selection.
+  The declared rules held up.
+- **Possible explanation (not tested):** the confirmation weeks run from 2 to 5
+  weeks after the April data that every model learned from. Gains that depend
+  on specific co-clicks (item-kNN) or popularity snapshots may fade with time.
+
 ---
 
 ## 7. Decisions
@@ -1404,7 +1493,7 @@ passed**, 2 known long-path failures.
 | 2 | Relevance model: full-April popularity in LightGBM; position debias (LightGBM `position`); `lambdarank` vs `rank_xendcg`; RankNet MLP check; optional GRU4Rec feature; lower learning rate; scale to 50k and all queries | **Steps 1–2 done** (§6a: popularity, position, xendcg, learning rate; §6b: 50k queries). Left: all-data training (needs less memory per row or a larger machine); RankNet MLP check; optional GRU4Rec feature |
 | 3 | Filter: retrain two-tower on all data; compare with popularity filter using the Phase 2 ranker; choose K1 and whether never-shown products are allowed | Pending |
 | 4 | Diversity: fixed-alpha curve vs adaptive policies (session variety, query position, category switch); declared rule: most ILD within 5% NDCG loss | **Item page evaluated on validation** (§6e); fixed alpha 0.8 (K1 = 20) chosen and frozen 2026-11-08. **Home page evaluated on validation** (§6g); item-kNN + fixed alpha 0.8 chosen and frozen 2026-11-08, **replaced 2026-11-09 by SASRec + 6 + 4** (§6j, confirmed on selection) |
-| 5 | Choose on selection, freeze, evaluate confirmation; session-bootstrap intervals by segment | **All three pages frozen and evaluated on selection** (§6d, §6f, §6h). Confirmation week not opened yet |
+| 5 | Choose on selection, freeze, evaluate confirmation; session-bootstrap intervals by segment | **All three pages frozen and evaluated on selection** (§6d, §6f, §6h, §6j). **Confirmation done 2026-11-09 (§6l)**: category and home pages confirmed; item page ties category popularity on NDCG, wins on MRR and variety |
 
 ### 8.0 Course requirements checklist (assessed 2026-11-08)
 
@@ -1413,7 +1502,7 @@ passed**, 2 known long-path failures.
 | Well-defined user problem and objective | Research question (§3 of the handover), product brief (§8.1), per-page metrics | One consolidated statement for the report. The original "adaptive diversity" hypothesis was not supported (§3, §2), so the objective should read as relevance with controlled variety, with adaptation as a tested-and-rejected idea | Writing |
 | At least one classical baseline (CF, MF) | **Done 2026-11-08 (§6c): item-kNN on session co-clicks**, plus popularity sort and the site's order | Originally: no collaborative-filtering model under the current protocol. The older pipeline's session co-occurrence graph and GRU4Rec/SASRec used persistent-user features and another protocol. Needed: item-kNN on session co-clicks (also the "You may also like" model). MF needs a learned vector per user or session, which new anonymous sessions do not have; its item factors can still be used item-to-item | Build |
 | At least one neural or advanced model | **SASRec (transformer) adopted for the home page 2026-11-09 (§6j, selection +0.016 NDCG over item-kNN + fixed 0.8)**; GRU4Rec and the two-tower evaluated; LightGBM LambdaMART/xendcg (advanced) on category pages | Re-evaluate the two-tower under the final data choices (clicks only, 50k) in the same table as the other models | Small |
-| Rigorous offline evaluation (NDCG, Recall@K, MRR) | NDCG@10, Recall@10, **MRR@10 (added 2026-11-08, §6c)**, recall at K1, ILD, session-bootstrap intervals, segments; one table of site order, popularity, item-kNN and LightGBM on identical queries (§6c); **held-out selection table for category pages (§6d, 2026-11-08)** | Confirmation (final held-out test) still sealed until the other pages are frozen. Originally: **everything was validation-only:** selection and confirmation (Phase 5) are needed for a held-out result. No single table compares every model under one protocol | Build |
+| Rigorous offline evaluation (NDCG, Recall@K, MRR) | NDCG@10, Recall@10, **MRR@10 (added 2026-11-08, §6c)**, recall at K1, ILD, session-bootstrap intervals, segments; one table of site order, popularity, item-kNN and LightGBM on identical queries (§6c); **held-out selection table for category pages (§6d, 2026-11-08)** | **Done 2026-11-09: confirmation for all three pages (§6l, one final table).** Earlier: confirmation (final held-out test) still sealed until the other pages are frozen. Originally: **everything was validation-only:** selection and confirmation (Phase 5) are needed for a held-out result. No single table compares every model under one protocol | Build |
 | Error analysis of failure modes | **Done 2026-11-08 (§6i)** for all three pages on selection data. Earlier, scattered findings: cold queries tie popularity, text search fails, never-shown products unjudgeable, token ILD ceiling, hyperparameter sensitivity, category ID dominates splits | A systematic analysis of the final model: where it loses to popularity (categories, deep-ranked clicks, unpopular or new products, session length), with example lists | Build + writing |
 | Ethical analysis | **Done 2026-11-09 (§6k, `ETHICS.md`)**: exposure measured on all three pages; written section drafted. Originally: anonymous design (no user IDs); notes on position bias and click-only selection effect | Originally not written. Topics with measurable parts: popularity bias and exposure concentration (coverage, Gini of recommended products), position bias in logged clicks, privacy of the website's interaction logging, stakeholder impact (long-tail sellers, shoppers), AI-generated demo names | Measurement + writing |
 
@@ -1490,6 +1579,7 @@ uv run main.py home-page
 uv run main.py home-page --home-config config/home_page_selection.json
 uv run main.py error-analysis
 uv run main.py exposure
+uv run main.py confirmation
 uv run main.py sequence-models
 uv run python scripts/analysis/session_lengths.py data/raw OUTPUT_FOLDER
 uv run python scripts/analysis/click_view.py data/raw

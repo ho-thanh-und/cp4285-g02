@@ -23,8 +23,8 @@ catalog, excluding products already clicked; hits are the later clicks.
 Methods on identical cases: popularity, trending (last days of the training
 window), item-kNN on the session's clicks, and the two-tower; then relevance
 only, fixed alpha and 6 + 4 over a pool from each listed base method.
-Only the validation and selection weeks can be opened; the selection week needs
-a frozen run and policy, written to frozen_choices.json before reading it.
+The held-out weeks (selection, then confirmation once; windows.py) need a frozen
+run and policy, written to frozen_choices.json before reading them.
 """
 
 import json
@@ -42,14 +42,14 @@ from .item_knn import cosine_similarity, read_knn_settings, session_baskets
 from .ranker_phase2 import window_activity
 from .study_files import save_table, write_json
 from .two_tower import _token_matrix, popularity_features
-from .ymal import ALLOWED_WINDOWS, DIVERSITY, RELEVANCE, list_metrics
+from .windows import HELD_OUT, check_not_opened, check_window
+from .ymal import DIVERSITY, RELEVANCE, list_metrics
 
 
 def read_home_settings(path):
     settings = json.loads(Path(path).read_text(encoding="utf-8"))
     window = settings["window"]
-    if ALLOWED_WINDOWS.get(window["name"]) != (window["start"], window["end_exclusive"]):
-        raise ValueError(f"window must be one of {ALLOWED_WINDOWS}; confirmation stays sealed")
+    check_window(window)
     for name in ("history_items", "embedding_dim", "hidden_dim", "epochs", "batch_size", "max_cases",
                  "epoch_check_cases", "trending_days", "threads", "max_name_tokens"):
         if not isinstance(settings[name], int) or settings[name] < 1:
@@ -60,12 +60,13 @@ def read_home_settings(path):
         raise ValueError("Need 0 < relevance_slots < top_k <= pool_size")
     if set(settings["diversity_bases"]) - {"two_tower", "item_knn"}:
         raise ValueError("diversity_bases may contain two_tower and item_knn")
-    if window["name"] == "selection":
+    if window["name"] in HELD_OUT:
         names = {"popularity", "trending", "item_knn", "two_tower"} | {
             f"{kind}_{base}" for base in settings["diversity_bases"]
             for kind in ["six_four"] + [f"fixed_{a:g}" for a in settings["fixed_alphas"]]}
         if settings.get("frozen_policy") not in names or not settings.get("frozen_run"):
-            raise ValueError(f"The selection week needs frozen_run and frozen_policy, one of {sorted(names)}")
+            raise ValueError(f"The {window['name']} week needs frozen_run and frozen_policy, "
+                             f"one of {sorted(names)}")
     return settings
 
 
@@ -360,9 +361,10 @@ def run_home_page(settings_path=Path("config/home_page.json"), output_root=None)
     knn_settings = read_knn_settings(settings["knn_config"])
     window = settings["window"]
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    check_not_opened(Path(output_root or settings["output_directory"]), window["name"])
     folder = Path(output_root or settings["output_directory"]) / f"{stamp}_{window['name']}"
     folder.mkdir(parents=True)
-    selection = window["name"] == "selection"
+    selection = window["name"] in HELD_OUT  # a held-out week: reuse the frozen model
     if selection:
         from .heldout import git_state
         frozen_run = Path(settings["frozen_run"])

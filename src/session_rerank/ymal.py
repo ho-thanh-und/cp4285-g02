@@ -9,8 +9,8 @@ shopper clicked at least one *different* product later in the same session;
 those later clicks are the hits. Pages without a later click are skipped rather
 than scored as failures. All eligible sessions of the week are used, not only
 the sampled queries; the similarity comes from April only, so nothing leaks.
-Only the validation week (May 1–7) and the selection week (May 9–14) may be
-used; confirmation stays sealed.
+Weeks: validation (May 1–7), selection (May 9–14) and confirmation (May 16 –
+June 1, opened once); the held-out weeks need a frozen policy (windows.py).
 
 Candidate pool for an item. Its top co-click neighbours (item-kNN cosine from
 April, §6c), up to K1; if fewer exist, the pool is filled with the most popular
@@ -43,8 +43,9 @@ from .diversity import ProductDiversity
 from .event_ablation import session_bootstrap
 from .item_knn import cosine_similarity, read_knn_settings, session_baskets
 from .study_files import save_table, write_json
+from .windows import HELD_OUT, WINDOWS, check_not_opened, check_window
 
-ALLOWED_WINDOWS = {"validation": ("2016-05-01", "2016-05-08"), "selection": ("2016-05-09", "2016-05-15")}
+ALLOWED_WINDOWS = WINDOWS
 RELEVANCE = ["recall", "hit", "mrr", "ndcg"]
 DIVERSITY = ["combined_ild", "token_ild", "category_ild", "distinct_categories", "outside_category_share",
              "tail_to_head_distance"]
@@ -53,22 +54,21 @@ DIVERSITY = ["combined_ild", "token_ild", "category_ild", "distinct_categories",
 def read_ymal_settings(path):
     settings = json.loads(Path(path).read_text(encoding="utf-8"))
     window = settings["window"]
-    if ALLOWED_WINDOWS.get(window["name"]) != (window["start"], window["end_exclusive"]):
-        raise ValueError(f"window must be one of {ALLOWED_WINDOWS}; confirmation stays sealed")
+    check_window(window)
     if not 0 < settings["relevance_slots"] < settings["top_k"]:
         raise ValueError("relevance_slots must be between 1 and top_k - 1")
     if any(k1 < settings["top_k"] for k1 in settings["pool_sizes"]) or not settings["pool_sizes"]:
         raise ValueError("pool_sizes must be at least top_k")
     if any(not 0 <= a <= 1 for a in settings["fixed_alphas"]):
         raise ValueError("fixed_alphas must be in [0, 1]")
-    if window["name"] == "selection":
-        # The held-out week may only be opened with a policy frozen on validation.
+    if window["name"] in HELD_OUT:
+        # A held-out week may only be opened with a policy frozen on validation.
         frozen = settings.get("frozen_policy")
         names = {"category_popularity"} | {f"{kind}_{k1}" for k1 in settings["pool_sizes"]
                                            for kind in ["relevance", "six_four"]
                                            + [f"fixed_{a:g}" for a in settings["fixed_alphas"]]}
         if frozen not in names:
-            raise ValueError(f"The selection week needs frozen_policy, one of {sorted(names)}")
+            raise ValueError(f"The {window['name']} week needs frozen_policy, one of {sorted(names)}")
     return settings
 
 
@@ -196,9 +196,10 @@ def run_ymal(settings_path=Path("config/ymal.json"), output_root=None):
     knn_settings = read_knn_settings(settings["knn_config"])
     window = settings["window"]
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    check_not_opened(Path(output_root or settings["output_directory"]), window["name"])
     folder = Path(output_root or settings["output_directory"]) / f"{stamp}_{window['name']}"
     folder.mkdir(parents=True)
-    if window["name"] == "selection":
+    if window["name"] in HELD_OUT:
         # Freeze before any data of the held-out week is read.
         from .heldout import git_state
         write_json(folder / "frozen_choices.json", dict(

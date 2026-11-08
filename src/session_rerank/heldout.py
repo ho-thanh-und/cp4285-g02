@@ -19,8 +19,10 @@ Order of operations, each step recorded before the next:
 5. Evaluate site order, popularity sort, item-kNN and both LightGBM models;
    apply the declared selection rule (higher category-page click NDCG@10).
 
-Only the selection split may be opened here. Confirmation stays sealed until
-the other pages' choices are frozen as well.
+Splits: selection (the declared rule chooses between the two frozen LightGBM
+models) and confirmation (opened once, after every page is frozen; it needs
+frozen_selection_run, and the model chosen there is the reported model; the
+rule is not applied again).
 """
 
 import gc
@@ -45,17 +47,22 @@ from .ranker_phase2 import ALL_FEATURES, Phase2Data, read_phase2_settings
 from .ranking_settings import top_k
 from .samples import select_sessions
 from .study_files import save_table, write_json
+from .windows import check_not_opened
 
 METRICS = ["click_ndcg", "recall_at_k", "mrr"]
 POPULARITY_COLUMNS = [ALL_FEATURES.index("window_click_rate"), ALL_FEATURES.index("window_purchase_rate")]
-OPENABLE_SPLITS = ("selection",)
+OPENABLE_SPLITS = ("selection", "confirmation")
 
 
 def read_heldout_settings(path):
     settings = json.loads(Path(path).read_text(encoding="utf-8"))
     if settings["split"] not in OPENABLE_SPLITS:
-        raise ValueError("Only the selection split may be opened now; confirmation stays sealed "
-                         "until the home page and 'You may also like' choices are frozen too")
+        raise ValueError(f"split must be one of {OPENABLE_SPLITS}")
+    if settings["split"] == "confirmation":
+        choice = Path(settings.get("frozen_selection_run") or "missing") / "selection_choice.json"
+        if not choice.exists():
+            raise ValueError("The confirmation split needs frozen_selection_run: the selection run whose "
+                             "selection_choice.json fixes the model")
     if settings["bootstrap_replicates"] < 1:
         raise ValueError("bootstrap_replicates must be positive")
     return settings
@@ -93,8 +100,12 @@ def split_database(config, split, path):
     raw = Path(protocol["raw_directory"])
     _, meta = select_sessions(raw, protocol)
     meta = meta[meta.split.eq(split)]
-    reserved = pd.read_parquet(pilot / "queries.parquet")
-    reserved = set(reserved.loc[reserved.split.eq(split), "query_id"])
+    if split == "confirmation":
+        # The pilot keeps its confirmation reservation in its own file, apart from the opened splits.
+        reserved = set(pd.read_parquet(pilot / "confirmation_ids.parquet").query_id)
+    else:
+        reserved = pd.read_parquet(pilot / "queries.parquet")
+        reserved = set(reserved.loc[reserved.split.eq(split), "query_id"])
     if set(meta.queryId) != reserved:
         raise ValueError(f"Rebuilt {split} query IDs differ from the pilot's reserved IDs")
     create_database(raw, meta, path)
@@ -198,8 +209,12 @@ def run_heldout(settings_path=Path("config/heldout.json"), output_root=None):
     knn_settings = read_knn_settings(settings["knn_config"])
     variant, models = frozen_models(settings["phase2_run"], phase2_settings)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    check_not_opened(Path(output_root or settings["output_directory"]), settings["split"])
     folder = Path(output_root or settings["output_directory"]) / f"{stamp}_{settings['split']}"
     folder.mkdir(parents=True)
+    confirmation = settings["split"] == "confirmation"
+    chosen = (json.loads((Path(settings["frozen_selection_run"]) / "selection_choice.json").read_text())["chosen"]
+              if confirmation else None)
 
     # 1. Freeze before anything about the held-out split is read.
     write_json(folder / "frozen_choices.json", dict(
@@ -212,6 +227,7 @@ def run_heldout(settings_path=Path("config/heldout.json"), output_root=None):
         selection_rule=("Choose between click_session and purchase_session by higher category-page click "
                         "NDCG@10 on the selection split; ties go to click_session. Report every method."),
         heldout_split=settings["split"],
+        chosen_model=chosen, selection_run=settings.get("frozen_selection_run"),
     ))
     print(f"[freeze] Choices written to {folder / 'frozen_choices.json'}", flush=True)
 
@@ -268,12 +284,19 @@ def run_heldout(settings_path=Path("config/heldout.json"), output_root=None):
                          .reset_index().assign(segment=name) for name, select in segments.items()],
                         ignore_index=True)
     category = summary[summary.segment.eq("category_pages")].set_index("method").click_ndcg
-    chosen = ("purchase_session" if category["lightgbm_purchase_session"] > category["lightgbm_click_session"]
-              else "click_session")
-    write_json(folder / "selection_choice.json", dict(
-        rule="higher category-page click NDCG@10 on the selection split; ties to click_session",
-        click_session=float(category["lightgbm_click_session"]),
-        purchase_session=float(category["lightgbm_purchase_session"]), chosen=chosen))
+    if confirmation:
+        # The model was chosen on the selection split; only report it here.
+        write_json(folder / "confirmation_model.json", dict(
+            chosen=chosen, chosen_on=settings["frozen_selection_run"],
+            click_session=float(category["lightgbm_click_session"]),
+            purchase_session=float(category["lightgbm_purchase_session"])))
+    else:
+        chosen = ("purchase_session" if category["lightgbm_purchase_session"] > category["lightgbm_click_session"]
+                  else "click_session")
+        write_json(folder / "selection_choice.json", dict(
+            rule="higher category-page click NDCG@10 on the selection split; ties to click_session",
+            click_session=float(category["lightgbm_click_session"]),
+            purchase_session=float(category["lightgbm_purchase_session"]), chosen=chosen))
     save_table(candidates, folder / f"{settings['split']}_candidates.parquet")
     save_table(per_query, folder / f"{settings['split']}_per_query.parquet")
     save_table(summary, folder / "summary.csv")
@@ -283,5 +306,5 @@ def run_heldout(settings_path=Path("config/heldout.json"), output_root=None):
         click_queries=int(candidates.groupby("query_id").clicked.any().sum()),
         candidate_rows=len(candidates), sessions=int(candidates.session_key.nunique()),
         queries_with_history=int(sum(v > 0 for v in history.values())), knn=knn.stats))
-    print(f"Held-out {settings['split']} evaluation saved to {folder}; chosen model: {chosen}", flush=True)
+    print(f"Held-out {settings['split']} evaluation saved to {folder}; model: {chosen}", flush=True)
     return folder

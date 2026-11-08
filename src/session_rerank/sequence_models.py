@@ -46,6 +46,7 @@ from .diversity import ProductDiversity
 from .event_ablation import session_bootstrap
 from .home_page import click_sequences, evaluation_cases, read_home_settings
 from .study_files import save_table, write_json
+from .windows import HELD_OUT, check_not_opened
 from .ymal import DIVERSITY, RELEVANCE, list_metrics
 
 MODELS = ("sasrec", "gru4rec")
@@ -68,8 +69,8 @@ def read_sequence_settings(path):
     if not 0 <= settings["popular_negative_share"] <= 1 or not 0 <= settings["dropout"] < 1:
         raise ValueError("popular_negative_share must be in [0, 1] and dropout in [0, 1)")
     home = read_home_settings(settings["home_config"])
-    if home["window"]["name"] == "selection" and not settings.get("frozen_run"):
-        raise ValueError("The selection week needs frozen_run: the saved validation-week sequence models")
+    if home["window"]["name"] in HELD_OUT and not settings.get("frozen_run"):
+        raise ValueError(f"The {home['window']['name']} week needs frozen_run: the saved validation-week models")
     if settings.get("reuse_run") and (home["window"]["name"] != "validation" or settings.get("frozen_run")):
         raise ValueError("reuse_run (score saved models without training) is for the validation week only")
     # Optional: fixed-alpha and 6 + 4 reorderings of each model's top pool_size products.
@@ -274,9 +275,10 @@ def run_sequence_models(settings_path=Path("config/sequence_models.json"), outpu
     settings, home = read_sequence_settings(settings_path)
     window = home["window"]
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    check_not_opened(Path(output_root or settings["output_directory"]), window["name"])
     folder = Path(output_root or settings["output_directory"]) / f"{stamp}_{window['name']}"
     folder.mkdir(parents=True)
-    selection = window["name"] == "selection"
+    selection = window["name"] in HELD_OUT  # a held-out week: score the frozen models
     # Saved models to score without training: the frozen run on the selection
     # week, or (optional) an earlier validation run such as a cluster grid run.
     source = Path(settings["frozen_run"]) if selection else (

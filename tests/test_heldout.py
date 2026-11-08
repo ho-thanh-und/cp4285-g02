@@ -16,11 +16,20 @@ LEAD = {"id": "popularity_xendcg", "popularity": True, "position_debias": False,
         "learning_rate": 0.1}
 
 
-def test_confirmation_stays_sealed(tmp_path):
+def test_confirmation_needs_the_model_chosen_on_selection(tmp_path):
+    base = dict(output_directory="x", split="confirmation", trained_run="x", phase2_run="x",
+                phase2_config="x", knn_config="x", bootstrap_replicates=10, seed=1)
     path = tmp_path / "heldout.json"
-    path.write_text(json.dumps(dict(output_directory="x", split="confirmation", trained_run="x", phase2_run="x",
-                                    phase2_config="x", knn_config="x", bootstrap_replicates=10, seed=1)))
-    with pytest.raises(ValueError, match="sealed"):
+    path.write_text(json.dumps(base))
+    with pytest.raises(ValueError, match="frozen_selection_run"):
+        read_heldout_settings(path)
+    selection = tmp_path / "selection"
+    selection.mkdir()
+    (selection / "selection_choice.json").write_text(json.dumps(dict(chosen="purchase_session")))
+    path.write_text(json.dumps(base | dict(frozen_selection_run=str(selection))))
+    assert read_heldout_settings(path)["split"] == "confirmation"
+    path.write_text(json.dumps(base | dict(split="test")))
+    with pytest.raises(ValueError, match="split"):
         read_heldout_settings(path)
 
 
