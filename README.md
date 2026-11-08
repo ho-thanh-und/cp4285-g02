@@ -179,6 +179,8 @@ uv run main.py ranker-phase2 --trained-run results/learning_curve_v2/queries_500
 uv run main.py item-knn --trained-run results/learning_curve_v2/queries_50000
 # Phase 5 for category pages: freeze choices, retrain the frozen rankers, evaluate on the selection split.
 uv run main.py heldout
+# Item page "You may also like": item-kNN lists, relevance only vs fixed alpha vs 6 + 4 (config/ymal.json).
+uv run main.py ymal
 ```
 
 Settings live in `config/alpha_sweep.json`, `config/two_tower.json`,

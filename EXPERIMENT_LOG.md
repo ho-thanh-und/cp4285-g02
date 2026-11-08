@@ -21,6 +21,8 @@ Contents
    - [6b. Experiment F (Phase 2, step 2): scaling to 50,000 training queries](#6b-experiment-f-phase-2-step-2-scaling-to-50000-training-queries)
    - [6c. Experiment G: classical baseline (item-kNN) and MRR](#6c-experiment-g-classical-baseline-item-knn-and-mrr)
    - [6d. Experiment H (Phase 5, category pages): held-out selection set](#6d-experiment-h-phase-5-category-pages-held-out-selection-set)
+   - [6e. Experiment I (Phase 4, item page): "You may also like" with 6 + 4](#6e-experiment-i-phase-4-item-page-you-may-also-like-with-6--4)
+   - [6f. Experiment J (Phase 5, item page): held-out selection week](#6f-experiment-j-phase-5-item-page-held-out-selection-week)
 7. [Decisions](#7-decisions)
 8. [Plan and status](#8-plan-and-status)
 9. [Known issues and caveats](#9-known-issues-and-caveats)
@@ -40,7 +42,7 @@ which is why this did not show up before.
 - `src/session_rerank/__init__.py` now imports LightGBM first, so any script
   that imports `session_rerank` before pandas is safe.
 - `tests/conftest.py` does the same for the test suite.
-- Test suite on Windows: **158 of 160 pass** (as of §6d; 141 of 143 when
+- Test suite on Windows: **167 of 169 pass** (as of §6f; 141 of 143 when
   first fixed). The 2 failures
   (`test_anonymous_study.py`, `test_expanded_study.py`, older study pipelines)
   fail while writing a temporary file at the end of a ~250-character path;
@@ -59,6 +61,7 @@ which is why this did not show up before.
 | `main.py` (`prepare_data_main`) | `prepare-data` | `config/learning_curve.json` | `tests/test_ranker_phase2.py` |
 | `item_knn.py` | `item-knn` | `config/item_knn.json` (its `compare_with` lists the Phase 2 runs to join) | `tests/test_item_knn.py` |
 | `heldout.py` | `heldout` | `config/heldout.json` | `tests/test_heldout.py` |
+| `ymal.py` | `ymal` | `config/ymal.json` (validation week), `config/ymal_selection.json` (frozen policy, selection week) | `tests/test_ymal.py` |
 
 **Analysis scripts** moved into the repository: `scripts/analysis/session_lengths.py`
 and `scripts/analysis/click_view.py`. Other dataset facts below were measured
@@ -622,11 +625,125 @@ should be read.
 
 ---
 
+## 6e. Experiment I (Phase 4, item page): "You may also like" with 6 + 4
+
+`results/ymal/20261108T090850Z_validation/` — `uv run main.py ymal` (`config/ymal.json`)
+
+**Design** (`ymal.py`), following the product rules (clicks only, no penalty
+for unclicked products):
+
+- **Item pages:** every product clicked in an eligible session (no hidden-label
+  query) of the validation week, May 1–7, from the raw files: 18,645 sessions,
+  49,845 clicks. A page is evaluable when the shopper clicked a different
+  product later in the session (26,419 pages); 20,000 were sampled with a fixed
+  seed. Later clicks are the hits; pages without one are skipped. The code
+  accepts only the validation and selection weeks.
+- **Pool:** the item's top co-click neighbours from April (item-kNN cosine,
+  §6c), K1 = 20 or 50, filled with the item category's most popular products
+  when there are too few. 17,997 pages (90%) have at least one neighbour.
+- **Methods:** category popularity (cold baseline), relevance only, fixed
+  alpha 0.8, and 6 + 4 (six most relevant, then four mutually diverse from the
+  rest of the pool), each with K1 = 20 and 50.
+- **Metrics:** Recall@10, hit rate, MRR@10, NDCG@10 against later clicks;
+  combined/token/category ILD@10, distinct categories, share outside the item's
+  category, and tail-to-head distance (positions 7–10 vs 1–6).
+
+**Results** (20,000 pages; intervals from 2,000 session-bootstrap replicates):
+
+| Method | Recall@10 | Hit rate | MRR@10 | NDCG@10 | ILD@10 | Category ILD | Categories in list | Tail-to-head |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Category popularity | 0.142 | 0.298 | 0.118 | 0.098 | 0.460 | 0.000 | 1.0 | 0.459 |
+| **Relevance only** (item-kNN) | **0.148** | **0.316** | **0.136** | **0.107** | 0.617 | 0.299 | 2.4 | 0.628 |
+| Fixed alpha 0.8, K1 = 20 | 0.140 | 0.306 | 0.133 | 0.103 | 0.650 | 0.355 | 2.8 | 0.656 |
+| Fixed alpha 0.8, K1 = 50 | 0.139 | 0.304 | 0.132 | 0.102 | 0.659 | 0.373 | 2.9 | 0.666 |
+| **6 + 4, K1 = 20** | 0.134 | 0.294 | 0.134 | 0.101 | 0.685 | 0.416 | 3.2 | 0.714 |
+| **6 + 4, K1 = 50** | 0.128 | 0.284 | 0.133 | 0.098 | **0.727** | **0.497** | **3.7** | **0.775** |
+
+(Relevance only is identical for K1 = 20 and 50: the pool size only matters to
+the diversity policies.)
+
+- **Item-kNN beats category popularity** on every relevance metric: recall
+  +0.006 (+0.001, +0.012), hit +0.017, MRR +0.018, NDCG +0.010; all intervals
+  above zero. Its lists already span 2.4 categories on average, against 1.0.
+- **Cost and gain of diversity against relevance only** (all intervals exclude
+  zero):
+
+  | Policy | Recall | Hit rate | MRR | NDCG (relative) | ILD | Category ILD | Tail-to-head |
+  |---|---:|---:|---:|---:|---:|---:|---:|
+  | Fixed 0.8, K1 = 20 | −0.008 | −0.010 | −0.003 | −0.004 (−4.0%) | +0.033 | +0.056 | +0.028 |
+  | Fixed 0.8, K1 = 50 | −0.009 | −0.012 | −0.004 | −0.005 (−5.0%) | +0.042 | +0.073 | +0.038 |
+  | 6 + 4, K1 = 20 | −0.014 | −0.022 | −0.002 | −0.006 (−5.9%) | +0.068 | +0.116 | +0.086 |
+  | 6 + 4, K1 = 50 | −0.020 | −0.032 | −0.004 | −0.009 (−8.3%) | +0.110 | +0.197 | +0.147 |
+
+- **6 + 4 keeps the top of the list:** MRR drops by only 0.002–0.004 because
+  positions 1–6 are unchanged; its cost sits in hits at positions 7–10. Fixed
+  alpha changes the whole list and gives about half the diversity for about
+  half the recall cost.
+- **The diverse tail really differs from the head:** tail-to-head distance
+  rises from 0.63 to 0.71 (K1 = 20) or 0.77 (K1 = 50).
+- **Unlike category pages, ILD moves here**, because recommendations can cross
+  categories (category ILD 0.30–0.50 against 0.02 on category pages).
+- **Caveat:** later clicks can only land on products the shopper was shown on
+  the site, and cross-category products were shown less often. The relevance
+  cost of diversity is therefore likely overstated offline.
+
+**Decision rule check.** The plan's rule (§8, Phase 4: most ILD within 5% NDCG
+loss) admits fixed alpha 0.8 with K1 = 20 (−4.0%) and rejects 6 + 4 (−5.9% and
+−8.3%); the product brief asked for 6 + 4 on this page.
+
+**Decision (user, 2026-11-08): fixed alpha 0.8 with K1 = 20**, following the
+declared rule. K1 = 50 was not chosen because it lands at −5.0%. Speed was
+checked and does not separate the policies: on a 20-product pool fixed alpha
+takes 0.08 ms and 6 + 4 0.06 ms, both dwarfed by the 4 ms needed for product
+distances, which both policies use (and which can be precomputed per product
+for the website).
+
+---
+
+## 6f. Experiment J (Phase 5, item page): held-out selection week
+
+`results/ymal/20261108T092942Z_selection/` — `uv run main.py ymal --ymal-config config/ymal_selection.json`
+
+**Procedure.** `frozen_choices.json` (policy `fixed_0.8_20`, the user's reason,
+similarity settings, metrics, code state: commit `acd20f7` plus the uncommitted
+freeze code) was written before the week was read. The code refuses the
+selection week without a frozen policy. Week May 9–14: 19,270 eligible sessions,
+55,157 clicks, 29,951 evaluable item pages, 20,000 sampled with the fixed seed;
+17,625 (88%) have co-click neighbours. All policies are still scored on the
+same pages for comparison.
+
+| Method | Recall@10 | Hit rate | MRR@10 | NDCG@10 | ILD@10 | Category ILD | Categories in list | Tail-to-head |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Category popularity | 0.139 | 0.291 | 0.112 | 0.091 | 0.458 | 0.000 | 1.0 | 0.458 |
+| Relevance only (item-kNN) | 0.145 | 0.304 | 0.128 | 0.101 | 0.620 | 0.304 | 2.5 | 0.631 |
+| **Fixed alpha 0.8, K1 = 20 (frozen)** | 0.139 | 0.295 | 0.125 | 0.097 | 0.652 | 0.360 | 2.8 | 0.659 |
+| 6 + 4, K1 = 20 | 0.132 | 0.283 | 0.126 | 0.095 | 0.687 | 0.421 | 3.2 | 0.716 |
+| 6 + 4, K1 = 50 | 0.126 | 0.272 | 0.125 | 0.093 | 0.727 | 0.497 | 3.7 | 0.774 |
+
+- **Frozen policy vs relevance only:** NDCG −0.003 (−3.3%, interval −0.0037
+  to −0.0029), recall −0.006, MRR −0.003; ILD +0.033 (+0.032, +0.033), category
+  ILD +0.056, tail-to-head +0.029. Inside the 5% rule, as on validation (−4.0%).
+- **Frozen policy vs category popularity (the cold baseline):** NDCG +0.007
+  (+0.003, +0.011), MRR +0.013 (+0.008, +0.019); recall and hit rate level
+  (intervals around zero); ILD +0.194 and 2.8 categories instead of 1.0.
+- **Item-kNN relevance vs category popularity** again beats it on every
+  relevance metric (NDCG +0.010, +0.006 to +0.014).
+- 6 + 4 with K1 = 20 costs −5.5% NDCG for +0.068 ILD, repeating the validation
+  trade-off.
+
+**Reading.** The item-page results held on the untouched week: item-kNN is the
+right base for "You may also like", and the frozen fixed-alpha policy stays
+within the declared relevance budget while adding measurable cross-category
+variety.
+
+---
+
 ## 7. Decisions
 
 | Date | Decision | Evidence |
 |---|---|---|
 | 2026-11-08 | **Category-page ranker adds window popularity features; lead candidate is `rank_xendcg` with those features.** Position correction and learning rate 0.02 are not adopted for now. | §6a: popularity +0.03 (intervals above zero); xendcg is the only variant ahead of the popularity sort in every model/statistic. To be confirmed on selection data (Phase 5). |
+| 2026-11-08 | **"You may also like" uses item-kNN with fixed alpha 0.8 over a 20-product pool** (user decision, replaces the brief's 6 + 4 for this page); frozen before the selection week is opened. | §6e: within the declared 5% NDCG rule (−4.0%), +0.033 ILD; 6 + 4 gave twice the diversity at −5.9%. Speed is equal. |
 | 2026-11-08 | **Category-page choices frozen; `purchase_session` (popularity + xendcg, 50k) is the category-page ranker.** | §6d: frozen before the selection split was read; selection confirms LightGBM over both baselines; the declared rule picks `purchase_session` by 0.0001 NDCG (a practical tie). |
 | 2026-11-08 | **Item-kNN on session co-clicks is the classical CF baseline** (and the planned "You may also like" model); MRR@10 is reported with NDCG@10 and Recall@10. | §6c: LightGBM beats item-kNN by +0.025 NDCG (interval above zero); item-kNN beats popularity only in direction. |
 | 2026-11-08 | **Train the category-page ranker on 50,000 queries** (data folder `results/learning_curve_v2/queries_50000`); keep `popularity_xendcg` as the lead. Position correction is dropped. | §6b: 50k adds +0.008 to +0.021 over 10k; at 50k all variants beat the popularity sort by about +0.03 and differ from each other by less than 0.01. All-data training does not fit in the free memory yet. |
@@ -655,8 +772,8 @@ should be read.
 | 1 | Views ablation; multi-click training filter | **Done** (§6, §7) |
 | 2 | Relevance model: full-April popularity in LightGBM; position debias (LightGBM `position`); `lambdarank` vs `rank_xendcg`; RankNet MLP check; optional GRU4Rec feature; lower learning rate; scale to 50k and all queries | **Steps 1–2 done** (§6a: popularity, position, xendcg, learning rate; §6b: 50k queries). Left: all-data training (needs less memory per row or a larger machine); RankNet MLP check; optional GRU4Rec feature |
 | 3 | Filter: retrain two-tower on all data; compare with popularity filter using the Phase 2 ranker; choose K1 and whether never-shown products are allowed | Pending |
-| 4 | Diversity: fixed-alpha curve vs adaptive policies (session variety, query position, category switch); declared rule: most ILD within 5% NDCG loss | Pending |
-| 5 | Choose on selection, freeze, evaluate confirmation; session-bootstrap intervals by segment | **Category pages: frozen and evaluated on selection** (§6d). Confirmation sealed until the home page and "You may also like" are frozen |
+| 4 | Diversity: fixed-alpha curve vs adaptive policies (session variety, query position, category switch); declared rule: most ILD within 5% NDCG loss | **Item page evaluated on validation** (§6e); fixed alpha 0.8 (K1 = 20) chosen and frozen 2026-11-08. Home page pending |
+| 5 | Choose on selection, freeze, evaluate confirmation; session-bootstrap intervals by segment | **Category pages and item page: frozen and evaluated on selection** (§6d, §6f). Confirmation sealed until the home page is frozen |
 
 ### 8.0 Course requirements checklist (assessed 2026-11-08)
 
@@ -736,6 +853,8 @@ uv run main.py ranker-phase2 --trained-run results/learning_curve_v2/queries_500
 uv run main.py ranker-phase2 --trained-run results/learning_curve_v2/queries_50000 --phase2-config config/ranker_lead_50k.json
 uv run main.py item-knn --trained-run results/learning_curve_v2/queries_50000
 uv run main.py heldout
+uv run main.py ymal
+uv run main.py ymal --ymal-config config/ymal_selection.json
 uv run python scripts/analysis/session_lengths.py data/raw OUTPUT_FOLDER
 uv run python scripts/analysis/click_view.py data/raw
 ```
@@ -758,3 +877,4 @@ uv run python scripts/analysis/click_view.py data/raw
 | `heldout/…/frozen_choices.json`, `selection_choice.json` | Choices frozen before opening the split; the declared rule's outcome |
 | `heldout/…/summary.csv`, `differences.csv`, `selection_per_query.parquet` | Held-out NDCG/Recall/MRR by method and segment, with intervals |
 | `heldout/…/click_session.txt`, `purchase_session.txt`, `selection.sqlite` | Frozen models and the rebuilt selection split |
+| `ymal/…/summary.csv`, `differences.csv`, `per_page.parquet` | Item-page relevance and diversity by method; differences vs category popularity and vs relevance only |

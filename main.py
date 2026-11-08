@@ -174,6 +174,8 @@ def cli(argv=None):
     with the popularity sort and any Phase 2 runs listed in config/item_knn.json.
     `uv run main.py heldout` freezes the category-page choices, retrains the frozen
     rankers and evaluates every method on the reserved selection queries.
+    `uv run main.py ymal` evaluates item-page "You may also like" lists (item-kNN,
+    relevance only, fixed alpha, 6 + 4) on one allowed week, clicks only.
     `uv run main.py pilot-train` retains the original click-only pilot workflow.
     `uv run main.py diversity --ranker-run results/anonymous_rankers/RUN` reviews ILD.
     `uv run main.py run --ranker-run results/anonymous_rankers/RUN` completes the study.
@@ -184,7 +186,7 @@ def cli(argv=None):
     expanded study settings. --help performs no preparation.
     """
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", nargs="?", choices=["prepare", "train", "pilot-train", "diversity", "run", "resume", "expand", "expand-resume", "compare", "alpha-sweep", "two-tower", "filter-pipeline", "event-ablation", "ranker-phase2", "prepare-data", "item-knn", "heldout"], default="prepare",
+    parser.add_argument("action", nargs="?", choices=["prepare", "train", "pilot-train", "diversity", "run", "resume", "expand", "expand-resume", "compare", "alpha-sweep", "two-tower", "filter-pipeline", "event-ablation", "ranker-phase2", "prepare-data", "item-knn", "heldout", "ymal"], default="prepare",
                         help="Prepare, train, review diversity, run remaining stages, or resume a study")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG,
                         help="Sample sizes, date periods, and history limit")
@@ -216,10 +218,17 @@ def cli(argv=None):
                         help="Co-click basket size, shrinkage and runs to compare for item-knn")
     parser.add_argument("--heldout-config", type=Path, default=Path("config/heldout.json"),
                         help="Frozen runs and the held-out split for heldout (selection only for now)")
+    parser.add_argument("--ymal-config", type=Path, default=Path("config/ymal.json"),
+                        help="Week, pool sizes and policies for the item page 'You may also like' evaluation")
     args = parser.parse_args(argv)
     run_actions = ("alpha-sweep", "two-tower", "filter-pipeline", "event-ablation", "ranker-phase2", "item-knn")
     if (args.action in run_actions) != (args.trained_run is not None):
         parser.error(f"--trained-run is required with {', '.join(run_actions)}, and used only there")
+    if args.action == "ymal":
+        os.chdir(Path(__file__).resolve().parent)
+        from session_rerank.ymal import run_ymal
+        run_ymal(args.ymal_config)
+        return
     if args.action == "heldout":
         os.chdir(Path(__file__).resolve().parent)
         from session_rerank.heldout import run_heldout

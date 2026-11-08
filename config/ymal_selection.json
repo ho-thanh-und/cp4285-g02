@@ -1,0 +1,16 @@
+{
+  "output_directory": "results/ymal",
+  "raw_directory": "data/raw",
+  "trained_run": "results/learning_curve_v2/queries_50000",
+  "knn_config": "config/item_knn.json",
+  "window": {"name": "selection", "start": "2016-05-09", "end_exclusive": "2016-05-15"},
+  "frozen_policy": "fixed_0.8_20",
+  "frozen_reason": "Chosen by the user on 2026-11-08 from validation (EXPERIMENT_LOG.md 6e): the declared rule (most ILD within 5% NDCG loss) admits fixed alpha 0.8 with K1 = 20 (-4.0% NDCG, +0.033 ILD) and rejects 6 + 4.",
+  "top_k": 10,
+  "relevance_slots": 6,
+  "pool_sizes": [20, 50],
+  "fixed_alphas": [0.8],
+  "max_seeds": 20000,
+  "bootstrap_replicates": 2000,
+  "seed": 4285
+}
