@@ -18,7 +18,13 @@ set -euo pipefail
 cd "${PBS_O_WORKDIR}"
 mkdir -p logs
 
-PYTHON="${PYTHON:-.venv/bin/python}"
+# Activate the Miniconda environment created in CLUSTER_GUIDE.md step 3.
+# Set CONDA_SH if Miniconda is not installed in ~/miniconda3.
+set +u
+source "${CONDA_SH:-$HOME/miniconda3/etc/profile.d/conda.sh}"
+conda activate "${CONDA_ENV:-cp4285}"
+set -u
+PYTHON="${PYTHON:-python}"
 CONFIG=$(sed -n "${PBS_ARRAY_INDEX}p" config/sequence_grid/grid_index.txt)
 if [ -z "${CONFIG}" ]; then
     echo "No config for array task ${PBS_ARRAY_INDEX}" >&2

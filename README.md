@@ -187,6 +187,8 @@ uv run main.py home-page
 uv run main.py error-analysis
 # SASRec and GRU4Rec on the home-page cases (config/sequence_models.json).
 uv run main.py sequence-models
+# Transformers4Rec (own conda env): export, train with scripts/t4rec/train_t4rec.py, then score (scripts/t4rec/T4REC_GUIDE.md).
+uv run main.py export-sequences
 ```
 
 Settings live in `config/alpha_sweep.json`, `config/two_tower.json`,

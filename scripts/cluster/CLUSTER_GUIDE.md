@@ -49,30 +49,39 @@ rsync -avR results/learning_curve_v2/queries_50000/products.parquet results/home
 
 (`-R` keeps the `results/...` folder structure.)
 
-## 3. Create the Python environment
+## 3. Create the Python environment (Miniconda + pip)
 
-Python 3.11 is required. With `uv` (recommended, uses the project's lock file):
-
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-uv sync
-```
-
-If `uv` is not allowed, use a virtual environment with the packages the grid needs:
+Python 3.11 is required. `requirements.txt` pins the exact versions the
+experiments ran with (CPU build of torch). If Miniconda is not installed yet:
 
 ```bash
-python3.11 -m venv .venv
-.venv/bin/pip install "numpy<2" "pandas>=2.2,<3" "scipy>=1.12,<1.13" "pyarrow>=14,<15" lightgbm psutil "matplotlib>=3.9,<3.10" "torch==2.5.1" --extra-index-url https://download.pytorch.org/whl/cpu
+wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
+bash Miniconda3-latest-Linux-x86_64.sh -b -p "$HOME/miniconda3"
+source "$HOME/miniconda3/etc/profile.d/conda.sh"
 ```
+
+Create the environment and install the packages:
+
+```bash
+conda create -n cp4285 python=3.11 -y
+conda activate cp4285
+python -m pip install -r requirements.txt
+```
+
+The job scripts activate `cp4285` from `~/miniconda3`. If Miniconda lives
+elsewhere or the environment has another name, set them when submitting, e.g.
+`sbatch --export=ALL,CONDA_SH=/path/to/etc/profile.d/conda.sh,CONDA_ENV=myenv ...`.
 
 ## 4. Generate the grid and check the inputs
 
+With the environment active:
+
 ```bash
-.venv/bin/python scripts/cluster/make_sequence_grid.py --threads 8
+python scripts/cluster/make_sequence_grid.py --threads 8
 ```
 
 ```bash
-.venv/bin/python scripts/cluster/check_inputs.py
+python scripts/cluster/check_inputs.py
 ```
 
 The check must print `Ready.` before you submit.
@@ -102,7 +111,7 @@ writes its log to `logs/`; training prints one line per epoch.
 When all tasks have finished:
 
 ```bash
-.venv/bin/python scripts/cluster/collect_sequence_grid.py
+python scripts/cluster/collect_sequence_grid.py
 ```
 
 It ranks the settings by validation NDCG@10, shows the difference from

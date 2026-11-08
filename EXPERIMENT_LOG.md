@@ -46,7 +46,7 @@ which is why this did not show up before.
 - `src/session_rerank/__init__.py` now imports LightGBM first, so any script
   that imports `session_rerank` before pandas is safe.
 - `tests/conftest.py` does the same for the test suite.
-- Test suite on Windows: **189 of 191 pass** (as of §6j; 141 of 143 when
+- Test suite on Windows: **192 of 194 pass** (as of §6j, Transformers4Rec bridge; 141 of 143 when
   first fixed). The 2 failures
   (`test_anonymous_study.py`, `test_expanded_study.py`, older study pipelines)
   fail while writing a temporary file at the end of a ~250-character path;
@@ -68,6 +68,8 @@ which is why this did not show up before.
 | `ymal.py` | `ymal` | `config/ymal.json` (validation week), `config/ymal_selection.json` (frozen policy, selection week) | `tests/test_ymal.py` |
 | `error_analysis.py` | `error-analysis` | `config/error_analysis.json` | `tests/test_error_analysis.py` |
 | `sequence_models.py` | `sequence-models` | `config/sequence_models.json` (April), `config/sequence_models_feb_apr.json` (February–April) | `tests/test_sequence_models.py` |
+| `external_models.py` | `export-sequences`, `score-external` | `config/t4rec.json` | `tests/test_external_models.py` |
+| `scripts/t4rec/` (`train_t4rec.py`, `requirements-t4rec.txt`, `t4rec.slurm`, `T4REC_GUIDE.md`) | Transformers4Rec in its own environment | `config/t4rec.json` | helpers in `tests/test_external_models.py` |
 | `scripts/cluster/` (`make_sequence_grid.py`, `check_inputs.py`, `collect_sequence_grid.py`, `sequence_grid.slurm`, `sequence_grid.pbs`, `CLUSTER_GUIDE.md`) | cluster job array | generated `config/sequence_grid/` | `tests/test_cluster_scripts.py` |
 | `home_page.py` | `home-page` | `config/home_page.json` (validation week), `config/home_page_selection.json` (frozen policy and model, selection week) | `tests/test_home_page.py` |
 
@@ -1041,6 +1043,35 @@ GRU4Rec embedding 64/128 × learning rate 0.001/0.003 (60 epochs). Steps are in
 `scripts/cluster/CLUSTER_GUIDE.md`; `collect_sequence_grid.py` ranks the
 settings by validation NDCG with intervals against item-kNN and the frozen
 policy. `.gitattributes` keeps the job scripts on Unix line endings.
+
+**Cluster environment (user choice, 2026-11-08): Miniconda + pip.**
+`requirements.txt` pins the versions the experiments ran with (Python 3.11,
+numpy 1.26.4, pandas 2.3.3, pyarrow 14.0.2, scipy 1.12.0, LightGBM 4.7.0, CPU
+torch 2.5.1). The older `requirements.lock.txt` pins different, untested
+versions and should not be used. The job scripts activate the conda
+environment `cp4285`.
+
+**Transformers4Rec (requested 2026-11-08; built, not yet run).** Findings from
+its PyPI packages: latest release 23.12.0 (January 2024, none since); it requires
+Hugging Face `transformers` < 4.31 and `merlin-models`; `merlin-core` 23.8.0
+requires pandas < 1.6, dask, dask-cuda, numba and tensorflow-metadata, and
+`merlin-dataloader` lists Python 3.8–3.10. It therefore cannot share the main
+environment (pandas 2.3, Python 3.11). **User decision: a separate conda
+environment** (`cp4285-t4r`, Python 3.10, `scripts/t4rec/requirements-t4rec.txt`).
+
+It connects through files, so no project code runs in the old environment:
+`main.py export-sequences` (`external_models.py`) writes the training sessions,
+the exact home-page cases (checked against the saved home-page run) and the
+product vocabulary; `scripts/t4rec/train_t4rec.py` trains the library's
+documented XLNet next-item setup (causal masking, tied embeddings; best epoch by
+recall@10 on the same 3,000 check cases as the other neural models) and writes
+ranked predictions per case; `main.py score-external` scores them with the same
+metrics and compares them with every saved home-page method (and SASRec/GRU4Rec
+runs listed in `config/t4rec.json`) with session-bootstrap intervals. The export
+and scoring steps are tested; the training script has only its helper functions
+tested, because the library cannot be installed on the laptop, so it has a
+`--smoke` mode for a first check on the cluster. `scripts/t4rec/t4rec.slurm` runs
+all three steps; `scripts/t4rec/T4REC_GUIDE.md` has the instructions.
 
 ---
 

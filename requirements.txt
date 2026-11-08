@@ -1,0 +1,22 @@
+# Main project environment for Miniconda + pip (Python 3.11):
+#   conda create -n cp4285 python=3.11 -y
+#   conda activate cp4285
+#   python -m pip install -r requirements.txt
+#
+# Versions are pinned to the environment the experiments in EXPERIMENT_LOG.md
+# ran on. requirements.lock.txt pins different, untested versions; use this file.
+#
+# torch: the CPU build is used (the grid runs on CPU). For a GPU node, delete the
+# --extra-index-url line to get PyPI's default CUDA build of the same version.
+--extra-index-url https://download.pytorch.org/whl/cpu
+numpy==1.26.4
+pandas==2.3.3
+pyarrow==14.0.2
+scipy==1.12.0
+scikit-learn==1.5.2
+lightgbm==4.7.0
+torch==2.5.1
+psutil==7.2.2
+matplotlib==3.9.4
+requests==2.34.2
+pytest==9.2.0

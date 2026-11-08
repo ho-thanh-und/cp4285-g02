@@ -1,0 +1,23 @@
+# Separate environment for Transformers4Rec (it cannot share requirements.txt:
+# Merlin needs pandas < 1.6, Hugging Face transformers < 4.31, Python <= 3.10).
+#   conda create -n cp4285-t4r python=3.10 -y
+#   conda activate cp4285-t4r
+#   python -m pip install -r scripts/t4rec/requirements-t4rec.txt
+#
+# Pinned to the last Transformers4Rec release (23.12.0) and the Merlin 23.08
+# releases it was built against. Not yet installed by us: if pip reports a
+# conflict, keep the transformers4rec / merlin / pandas / transformers pins and
+# relax the others. The other dependencies (dask, numba, ...) are left to pip.
+#
+# torch: CPU build. For a GPU node, delete the --extra-index-url line.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.1.2
+transformers==4.30.2
+torchmetrics==0.11.4
+transformers4rec==23.12.0
+merlin-core==23.8.0
+merlin-dataloader==23.8.0
+merlin-models==23.8.0
+pandas==1.5.3
+numpy==1.24.4
+pyarrow==12.0.1

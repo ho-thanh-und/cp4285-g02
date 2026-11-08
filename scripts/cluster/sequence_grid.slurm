@@ -17,8 +17,13 @@ set -euo pipefail
 cd "${SLURM_SUBMIT_DIR}"
 mkdir -p logs
 
-# Python of the project environment (created with `uv sync` or pip, see the guide).
-PYTHON="${PYTHON:-.venv/bin/python}"
+# Activate the Miniconda environment created in CLUSTER_GUIDE.md step 3.
+# Set CONDA_SH if Miniconda is not installed in ~/miniconda3.
+set +u
+source "${CONDA_SH:-$HOME/miniconda3/etc/profile.d/conda.sh}"
+conda activate "${CONDA_ENV:-cp4285}"
+set -u
+PYTHON="${PYTHON:-python}"
 CONFIG=$(sed -n "${SLURM_ARRAY_TASK_ID}p" config/sequence_grid/grid_index.txt)
 if [ -z "${CONFIG}" ]; then
     echo "No config for array task ${SLURM_ARRAY_TASK_ID}" >&2

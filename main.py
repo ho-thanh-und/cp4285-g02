@@ -182,6 +182,9 @@ def cli(argv=None):
     on the selection results (config/error_analysis.json).
     `uv run main.py sequence-models` trains SASRec and GRU4Rec and compares them
     with the home-page methods on the same cases (config/sequence_models.json).
+    `uv run main.py export-sequences` and `score-external --export DIR --label NAME`
+    connect a recommender from another environment (Transformers4Rec, see
+    scripts/t4rec/T4REC_GUIDE.md) to the same home-page cases and metrics.
     `uv run main.py pilot-train` retains the original click-only pilot workflow.
     `uv run main.py diversity --ranker-run results/anonymous_rankers/RUN` reviews ILD.
     `uv run main.py run --ranker-run results/anonymous_rankers/RUN` completes the study.
@@ -192,7 +195,7 @@ def cli(argv=None):
     expanded study settings. --help performs no preparation.
     """
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", nargs="?", choices=["prepare", "train", "pilot-train", "diversity", "run", "resume", "expand", "expand-resume", "compare", "alpha-sweep", "two-tower", "filter-pipeline", "event-ablation", "ranker-phase2", "prepare-data", "item-knn", "heldout", "ymal", "home-page", "error-analysis", "sequence-models"], default="prepare",
+    parser.add_argument("action", nargs="?", choices=["prepare", "train", "pilot-train", "diversity", "run", "resume", "expand", "expand-resume", "compare", "alpha-sweep", "two-tower", "filter-pipeline", "event-ablation", "ranker-phase2", "prepare-data", "item-knn", "heldout", "ymal", "home-page", "error-analysis", "sequence-models", "export-sequences", "score-external"], default="prepare",
                         help="Prepare, train, review diversity, run remaining stages, or resume a study")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG,
                         help="Sample sizes, date periods, and history limit")
@@ -232,7 +235,25 @@ def cli(argv=None):
                         help="Selection results to analyse for error-analysis")
     parser.add_argument("--sequence-config", type=Path, default=Path("config/sequence_models.json"),
                         help="SASRec / GRU4Rec settings and the home-page run to compare with")
+    parser.add_argument("--t4rec-config", type=Path, default=Path("config/t4rec.json"),
+                        help="Export, model and comparison settings for export-sequences / score-external")
+    parser.add_argument("--export", type=Path, help="Folder from export-sequences, for score-external")
+    parser.add_argument("--label", help="Method name for the scored predictions, e.g. t4rec_xlnet")
     args = parser.parse_args(argv)
+    external = args.export is not None or args.label is not None
+    if (args.action == "score-external" and (args.export is None or args.label is None)) or \
+            (args.action != "score-external" and external):
+        parser.error("score-external needs --export and --label, and they are used only there")
+    if args.action == "export-sequences":
+        os.chdir(Path(__file__).resolve().parent)
+        from session_rerank.external_models import export_sequences
+        export_sequences(args.t4rec_config)
+        return
+    if args.action == "score-external":
+        os.chdir(Path(__file__).resolve().parent)
+        from session_rerank.external_models import score_predictions
+        score_predictions(args.export, args.label, args.t4rec_config)
+        return
     if args.action == "sequence-models":
         os.chdir(Path(__file__).resolve().parent)
         from session_rerank.sequence_models import run_sequence_models

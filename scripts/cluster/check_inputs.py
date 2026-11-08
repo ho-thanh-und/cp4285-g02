@@ -5,7 +5,7 @@ the grid reads (raw CSVs, the product table, the saved home-page cases and the
 configs) and that the Python packages import. It prints what is missing and
 exits with status 1, so nothing is submitted against an incomplete copy.
 
-    .venv/bin/python scripts/cluster/check_inputs.py
+    python scripts/cluster/check_inputs.py   (with the conda environment active)
 """
 
 import importlib
