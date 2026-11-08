@@ -1104,6 +1104,82 @@ only one GPU available, `sequence_grid_gpu.sh` now runs four settings at a time
 on that GPU (16 CPU cores, 4 threads each), with one log per setting; the grid
 itself is unchanged.
 
+## 6k. Exposure and popularity bias (ethics, selection data, 2026-11-09)
+
+**Question.** Which products get shown, and how concentrated is exposure on
+popular products, for every evaluated method on all three pages?
+
+**Method** (`uv run main.py exposure`, `config/exposure.json`,
+`src/session_rerank/exposure.py`, `tests/test_exposure.py`).
+- Rebuild the selection-week top-10 lists of every method:
+  - home page: 20,000 cases
+  - item page: 20,000 pages
+  - category pages: 966 queries, using the saved LightGBM boosters and the
+    selection features rebuilt
+- Each rebuilt list's NDCG must equal the saved value (category pages: per-query
+  click NDCG of every method; candidates equal the saved table). **All three
+  pages passed.** To share code, `home_page.case_lists`/`load_frozen_model`
+  and `ymal.YmalData`/`page_lists` were factored out of the evaluation loops;
+  their tests still pass.
+- Popularity is April clicks. The **head** is the most-clicked products holding
+  50% of April clicks: 3,761 products (2% of 184,047). The tail is 41,754
+  other clicked products. **138,532 products (75%) had no April click.**
+- Every slot counts once. Coverage and Gini are measured over the whole catalog
+  (home, item) or over the products the site listed (category pages, 36,036).
+- Reference: the products shoppers clicked next (home and item pages: later
+  clicks; category pages: clicked listed products).
+
+**Results** (`results/exposure/20261108T160349Z/summary.csv`):
+
+| Page | Method | Distinct shown | Coverage | Gini | Head share | Tail | No-click | Head ratio to shoppers |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| Home | popularity | 12 | 0.000 | 1.000 | 1.000 | 0 | 0 | 3.32 |
+| Home | trending | 13 | 0.000 | 1.000 | 1.000 | 0 | 0 | 3.32 |
+| Home | item_knn | 27,461 | 0.149 | 0.938 | 0.324 | 0.676 | 0 | 1.07 |
+| Home | **fixed_0.8_item_knn (frozen)** | 27,431 | 0.149 | 0.937 | 0.313 | 0.687 | 0 | 1.04 |
+| Home | six_four_item_knn | 27,653 | 0.150 | 0.937 | 0.305 | 0.695 | 0 | 1.01 |
+| Home | two_tower | 27,670 | 0.150 | 0.949 | 0.391 | 0.484 | 0.125 | 1.30 |
+| Home | shopper clicks | 14,095 | 0.077 | 0.964 | 0.301 | 0.557 | 0.141 | 1.00 |
+| Item | category_popularity | 8,012 | 0.044 | 0.989 | 0.728 | 0.264 | 0.008 | 2.42 |
+| Item | relevance_20 | 32,070 | 0.174 | 0.920 | 0.302 | 0.695 | 0.003 | 1.00 |
+| Item | **fixed_0.8_20 (frozen)** | 32,296 | 0.175 | 0.918 | 0.289 | 0.708 | 0.004 | 0.96 |
+| Item | six_four_20 | 31,997 | 0.174 | 0.919 | 0.282 | 0.715 | 0.003 | 0.94 |
+| Category | site_order | 2,818 | 0.078 | 0.963 | 0.249 | 0.504 | 0.247 | 0.62 |
+| Category | popularity_sort | 2,796 | 0.078 | 0.964 | 0.722 | 0.270 | 0.008 | 1.80 |
+| Category | item_knn | 3,961 | 0.110 | 0.941 | 0.627 | 0.365 | 0.008 | 1.57 |
+| Category | **lightgbm_purchase_session (frozen)** | 3,349 | 0.093 | 0.954 | 0.681 | 0.298 | 0.021 | 1.70 |
+| Category | shopper clicks | 1,357 | 0.038 | 0.967 | 0.400 | 0.491 | 0.109 | 1.00 |
+
+**Reading.**
+- Cold-start popularity is the most concentrated: 12 products for every home
+  visitor.
+- The frozen item-kNN lists on the home and item pages match shoppers' own head
+  share (ratio 0.96–1.04) and show about twice as many distinct products as
+  shoppers clicked.
+- Fixed 0.8 and 6 + 4 lower the head share by only 1–2 points. They diversify
+  within a list, not across the catalog.
+- Item-kNN cannot show products without April clicks, though 14% of shoppers'
+  next clicks went to such products. The two-tower is the only method that
+  shows them (12.5% of slots), but it leans more on the head (ratio 1.30).
+- Category pages trade accuracy for exposure:
+  - the site's order is the most long-tail (25% head, 25% no-click) and the
+    least accurate (NDCG 0.065);
+  - the frozen LightGBM ranker (NDCG 0.203) puts 68% of slots on the 2% head,
+    1.7 times shoppers' share, and only 2.1% on no-click products.
+- Gini is near 1 for every method because the catalog is large, so coverage and
+  head share are the measures to report.
+
+The written section is `ETHICS.md`. It also covers stakeholders, feedback loops,
+training-data biases (position, click-only sessions, never-shown products),
+privacy of the demo website's logging, transparency, AI-generated demo names
+and limitations. Mitigations proposed there (exploration slots on category
+pages, capping popularity features, filling item-kNN pools by content) are
+not evaluated.
+
+Also: pytest's default temporary folder is blocked in this environment, so
+tests now run with `--basetemp` in the session scratchpad. Full suite: **203
+passed**, 2 known long-path failures.
+
 ---
 
 ## 7. Decisions
@@ -1154,10 +1230,10 @@ itself is unchanged.
 | At least one neural or advanced model | Two-tower (neural, rank-weighted loss); LightGBM LambdaMART/xendcg (advanced) | Re-evaluate the two-tower under the final data choices (clicks only, 50k) in the same table as the other models | Small |
 | Rigorous offline evaluation (NDCG, Recall@K, MRR) | NDCG@10, Recall@10, **MRR@10 (added 2026-11-08, §6c)**, recall at K1, ILD, session-bootstrap intervals, segments; one table of site order, popularity, item-kNN and LightGBM on identical queries (§6c); **held-out selection table for category pages (§6d, 2026-11-08)** | Confirmation (final held-out test) still sealed until the other pages are frozen. Originally: **everything was validation-only:** selection and confirmation (Phase 5) are needed for a held-out result. No single table compares every model under one protocol | Build |
 | Error analysis of failure modes | **Done 2026-11-08 (§6i)** for all three pages on selection data. Earlier, scattered findings: cold queries tie popularity, text search fails, never-shown products unjudgeable, token ILD ceiling, hyperparameter sensitivity, category ID dominates splits | A systematic analysis of the final model: where it loses to popularity (categories, deep-ranked clicks, unpopular or new products, session length), with example lists | Build + writing |
-| Ethical analysis | Anonymous design (no user IDs); notes on position bias and click-only selection effect | Not written. Topics with measurable parts: popularity bias and exposure concentration (coverage, Gini of recommended products), position bias in logged clicks, privacy of the website's interaction logging, stakeholder impact (long-tail sellers, shoppers), AI-generated demo names | Measurement + writing |
+| Ethical analysis | **Done 2026-11-09 (§6k, `ETHICS.md`)**: exposure measured on all three pages; written section drafted. Originally: anonymous design (no user IDs); notes on position bias and click-only selection effect | Originally not written. Topics with measurable parts: popularity bias and exposure concentration (coverage, Gini of recommended products), position bias in logged clicks, privacy of the website's interaction logging, stakeholder impact (long-tail sellers, shoppers), AI-generated demo names | Measurement + writing |
 
 Proposed order: (1) item-kNN baseline and MRR (**done**, §6c), (2) one comparison table on held-out
-data (Phase 5; **selection done for all three pages**, §6d/§6f/§6h), (3) error analysis (**done**, §6i), (4) ethics with exposure measurements,
+data (Phase 5; **selection done for all three pages**, §6d/§6f/§6h), (3) error analysis (**done**, §6i), (4) ethics with exposure measurements (**done**, §6k),
 (5) the written problem statement.
 
 ### 8.1 Product surfaces (user brief, 2026-11-08; open points 1–4 resolved)
@@ -1228,6 +1304,7 @@ uv run main.py ymal --ymal-config config/ymal_selection.json
 uv run main.py home-page
 uv run main.py home-page --home-config config/home_page_selection.json
 uv run main.py error-analysis
+uv run main.py exposure
 uv run main.py sequence-models
 uv run python scripts/analysis/session_lengths.py data/raw OUTPUT_FOLDER
 uv run python scripts/analysis/click_view.py data/raw

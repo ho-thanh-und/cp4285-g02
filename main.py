@@ -187,6 +187,8 @@ def cli(argv=None):
     recommendations over the whole catalog on one allowed week.
     `uv run main.py error-analysis` breaks down where the frozen models win and lose
     on the selection results (config/error_analysis.json).
+    `uv run main.py exposure` measures exposure and popularity bias of the frozen
+    lists on all three pages (config/exposure.json), for the ethics section.
     `uv run main.py sequence-models` trains SASRec and GRU4Rec and compares them
     with the home-page methods on the same cases (config/sequence_models.json).
     `uv run main.py export-sequences` and `score-external --export DIR --label NAME`
@@ -202,7 +204,7 @@ def cli(argv=None):
     expanded study settings. --help performs no preparation.
     """
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", nargs="?", choices=["prepare", "train", "pilot-train", "diversity", "run", "resume", "expand", "expand-resume", "compare", "alpha-sweep", "two-tower", "filter-pipeline", "event-ablation", "ranker-phase2", "prepare-data", "item-knn", "heldout", "ymal", "home-page", "error-analysis", "sequence-models", "export-sequences", "score-external"], default="prepare",
+    parser.add_argument("action", nargs="?", choices=["prepare", "train", "pilot-train", "diversity", "run", "resume", "expand", "expand-resume", "compare", "alpha-sweep", "two-tower", "filter-pipeline", "event-ablation", "ranker-phase2", "prepare-data", "item-knn", "heldout", "ymal", "home-page", "error-analysis", "exposure", "sequence-models", "export-sequences", "score-external"], default="prepare",
                         help="Prepare, train, review diversity, run remaining stages, or resume a study")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG,
                         help="Sample sizes, date periods, and history limit")
@@ -240,6 +242,8 @@ def cli(argv=None):
                         help="Session two-tower, week and policies for the home page evaluation")
     parser.add_argument("--errors-config", type=Path, default=Path("config/error_analysis.json"),
                         help="Selection results to analyse for error-analysis")
+    parser.add_argument("--exposure-config", type=Path, default=Path("config/exposure.json"),
+                        help="Selection runs whose lists exposure measures")
     parser.add_argument("--sequence-config", type=Path, default=Path("config/sequence_models.json"),
                         help="SASRec / GRU4Rec settings and the home-page run to compare with")
     parser.add_argument("--t4rec-config", type=Path, default=Path("config/t4rec.json"),
@@ -273,6 +277,11 @@ def cli(argv=None):
         os.chdir(Path(__file__).resolve().parent)
         from session_rerank.error_analysis import run_error_analysis
         run_error_analysis(args.errors_config)
+        return
+    if args.action == "exposure":
+        os.chdir(Path(__file__).resolve().parent)
+        from session_rerank.exposure import run_exposure
+        run_exposure(args.exposure_config)
         return
     if args.action == "home-page":
         os.chdir(Path(__file__).resolve().parent)

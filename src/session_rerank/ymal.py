@@ -146,6 +146,51 @@ def list_metrics(top, targets, item, catalog_ids, categories, diversity, relevan
     return result
 
 
+class YmalData:
+    """Catalog, April co-click similarity and popularity orders shared by every item page."""
+
+    def __init__(self, settings, knn_settings):
+        products = pd.read_parquet(Path(settings["trained_run"]) / "products.parquet")
+        self.item_index = pd.Series(np.arange(len(products)), index=products.item_id.to_numpy())
+        self.catalog_ids = products.item_id.to_numpy()
+        self.categories = products.category_id.fillna(-1).to_numpy(np.int64)
+        self.diversity = ProductDiversity(products)
+        session, item, clicks = session_baskets(settings["raw_directory"], "2016-04-01", "2016-04-30",
+                                                self.item_index, knn_settings["max_items_per_session"])
+        similarity, _ = cosine_similarity(session, item, len(products), knn_settings["shrinkage"])
+        self.similarity = similarity.tocsr()
+        popularity = np.bincount(self.item_index.loc[clicks.itemId].to_numpy(),
+                                 minlength=len(products)).astype(float)
+        self.global_order = np.argsort(-popularity, kind="stable")
+        self.by_category = {c: self.global_order[self.categories[self.global_order] == c]
+                            for c in np.unique(self.categories)}
+
+
+def page_lists(data, settings, seed_item):
+    """Every method's top-k product rows for one item page, with its co-click neighbour count."""
+    k, slots = settings["top_k"], settings["relevance_slots"]
+    by_category, global_order, diversity = data.by_category, data.global_order, data.diversity
+    category = data.categories[seed_item]
+    fill = np.concatenate([by_category[category], global_order[:200]])
+    category_top = np.array([p for p in by_category[category] if p != seed_item][:k]
+                            or [p for p in global_order[:k + 1] if p != seed_item][:k])
+    lists = {"category_popularity": (category_top, 0)}
+    for pool_size in settings["pool_sizes"]:
+        members, scores, neighbours = candidate_pool(data.similarity, seed_item, pool_size, fill)
+        ids = data.catalog_ids[members].tolist()
+        for product in ids:
+            if product not in diversity.name_tokens:
+                diversity.name_tokens[product], diversity.categories[product] = frozenset(), None
+        reward = np.nan_to_num(diversity.distances(ids)["combined"], nan=0.0)
+        orders = {f"relevance_{pool_size}": np.argsort(-scores, kind="stable")[:k],
+                  f"six_four_{pool_size}": diverse_tail_order(scores, reward, slots, k)}
+        for alpha in settings["fixed_alphas"]:
+            orders[f"fixed_{alpha:g}_{pool_size}"] = greedy_rerank(scores, reward, alpha, k)
+        for method, order in orders.items():
+            lists[method] = (members[np.asarray(order)], neighbours)
+    return lists
+
+
 def run_ymal(settings_path=Path("config/ymal.json"), output_root=None):
     settings = read_ymal_settings(settings_path)
     knn_settings = read_knn_settings(settings["knn_config"])
@@ -164,50 +209,23 @@ def run_ymal(settings_path=Path("config/ymal.json"), output_root=None):
             metrics=["Recall@10", "hit rate", "MRR@10", "NDCG@10", "ILD@10", "tail-to-head distance"],
             heldout_week=window))
         print(f"[ymal] Frozen policy {settings['frozen_policy']} written before opening the week", flush=True)
-    run = Path(settings["trained_run"])
-    products = pd.read_parquet(run / "products.parquet")
-    item_index = pd.Series(np.arange(len(products)), index=products.item_id.to_numpy())
-    catalog_ids = products.item_id.to_numpy()
-    categories = products.category_id.fillna(-1).to_numpy(np.int64)
-    diversity = ProductDiversity(products)
     print("[ymal] Co-click similarity from April raw clicks", flush=True)
-    session, item, clicks = session_baskets(settings["raw_directory"], "2016-04-01", "2016-04-30", item_index,
-                                            knn_settings["max_items_per_session"])
-    similarity, support = cosine_similarity(session, item, len(products), knn_settings["shrinkage"])
-    similarity = similarity.tocsr()
-    popularity = np.bincount(item_index.loc[clicks.itemId].to_numpy(), minlength=len(products)).astype(float)
-    global_order = np.argsort(-popularity, kind="stable")
-    by_category = {c: global_order[categories[global_order] == c] for c in np.unique(categories)}
+    data = YmalData(settings, knn_settings)
+    item_index, catalog_ids, categories = data.item_index, data.catalog_ids, data.categories
+    diversity, similarity = data.diversity, data.similarity
     print(f"[ymal] Item pages of the {window['name']} week {window['start']} to before {window['end_exclusive']}",
           flush=True)
     pages, page_stats = item_pages(settings["raw_directory"], window["start"], window["end_exclusive"], item_index,
                                    settings["max_seeds"], settings["seed"])
-    k, slots = settings["top_k"], settings["relevance_slots"]
+    slots = settings["relevance_slots"]
     rows = []
     for number, (session_key, seed_item, later) in enumerate(pages, start=1):
         targets = set(later)
-        fill = np.concatenate([by_category[categories[seed_item]], global_order[:200]])
         base = dict(session_key=session_key, item=int(catalog_ids[seed_item]), targets=len(targets))
-        category_top = np.array([p for p in by_category[categories[seed_item]] if p != seed_item][:k]
-                                or [p for p in global_order[:k + 1] if p != seed_item][:k])
-        rows.append(base | dict(method="category_popularity", neighbours=0,
-                                **list_metrics(category_top, targets, seed_item, catalog_ids, categories,
-                                               diversity, slots)))
-        for pool_size in settings["pool_sizes"]:
-            members, scores, neighbours = candidate_pool(similarity, seed_item, pool_size, fill)
-            ids = catalog_ids[members].tolist()
-            for product in ids:
-                if product not in diversity.name_tokens:
-                    diversity.name_tokens[product], diversity.categories[product] = frozenset(), None
-            reward = np.nan_to_num(diversity.distances(ids)["combined"], nan=0.0)
-            orders = {f"relevance_{pool_size}": np.argsort(-scores, kind="stable")[:k],
-                      f"six_four_{pool_size}": diverse_tail_order(scores, reward, slots, k)}
-            for alpha in settings["fixed_alphas"]:
-                orders[f"fixed_{alpha:g}_{pool_size}"] = greedy_rerank(scores, reward, alpha, k)
-            for method, order in orders.items():
-                rows.append(base | dict(method=method, neighbours=neighbours,
-                                        **list_metrics(members[np.asarray(order)], targets, seed_item, catalog_ids,
-                                                       categories, diversity, slots)))
+        for method, (top, neighbours) in page_lists(data, settings, seed_item).items():
+            rows.append(base | dict(method=method, neighbours=neighbours,
+                                    **list_metrics(top, targets, seed_item, catalog_ids, categories,
+                                                   diversity, slots)))
         if number % 2000 == 0 or number == len(pages):
             print(f"[ymal] {number:,}/{len(pages):,} item pages", flush=True)
     per_page = pd.DataFrame(rows)

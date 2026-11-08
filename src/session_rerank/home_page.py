@@ -283,30 +283,48 @@ def score_two_tower_cases(model, data, settings, cases):
     return rows
 
 
+def case_lists(data, model, vectors, settings, prefix):
+    """Every method's top-k product rows for one case; products already clicked are excluded."""
+    k, slots, pool = settings["top_k"], settings["relevance_slots"], settings["pool_size"]
+    exclude = set(prefix)
+    tower_scores = vectors @ session_vector(model, vectors, prefix, settings["history_items"])
+    neighbour_scores = knn_scores(data, prefix)
+    ranked = {"two_tower": (tower_scores, top_excluding(tower_scores, exclude, pool, scores=True)),
+              "item_knn": (neighbour_scores, top_excluding(neighbour_scores, exclude, pool, scores=True))}
+    lists = {"popularity": top_excluding(data.global_order, exclude, k),
+             "trending": top_excluding(data.trending_order, exclude, k),
+             "item_knn": ranked["item_knn"][1][:k], "two_tower": ranked["two_tower"][1][:k]}
+    for name in settings["diversity_bases"]:
+        values, members = ranked[name]
+        relevance = values[members]
+        ids = data.catalog_ids[members].tolist()
+        reward = np.nan_to_num(data.diversity.distances(ids)["combined"], nan=0.0)
+        lists[f"six_four_{name}"] = members[diverse_tail_order(relevance, reward, slots, k)]
+        for alpha in settings["fixed_alphas"]:
+            lists[f"fixed_{alpha:g}_{name}"] = members[greedy_rerank(relevance, reward, alpha, k)]
+    return lists
+
+
+def load_frozen_model(data, settings):
+    """The session two-tower saved by the frozen validation run."""
+    import torch
+    frozen_run = Path(settings["frozen_run"])
+    saved = json.loads((frozen_run / "home_settings.json").read_text())["settings"]
+    model = build_session_two_tower(data.names, data.category_ids, data.prices, data.popularity_inputs, saved)
+    model.load_state_dict(torch.load(frozen_run / "session_two_tower.pt"))
+    model.eval()
+    return model
+
+
 def evaluate(data, model, settings, cases):
     """All methods on identical cases, one row per case and method."""
-    k, slots, pool = settings["top_k"], settings["relevance_slots"], settings["pool_size"]
+    slots = settings["relevance_slots"]
     vectors = item_vectors(model, data)
     rows = []
     for number, (key, prefix, targets) in enumerate(cases, start=1):
-        exclude = set(prefix)
         reference = prefix[-1]
         base = dict(session_key=key, clicked_so_far=len(prefix), targets=len(targets))
-        tower_scores = vectors @ session_vector(model, vectors, prefix, settings["history_items"])
-        neighbour_scores = knn_scores(data, prefix)
-        ranked = {"two_tower": (tower_scores, top_excluding(tower_scores, exclude, pool, scores=True)),
-                  "item_knn": (neighbour_scores, top_excluding(neighbour_scores, exclude, pool, scores=True))}
-        lists = {"popularity": top_excluding(data.global_order, exclude, k),
-                 "trending": top_excluding(data.trending_order, exclude, k),
-                 "item_knn": ranked["item_knn"][1][:k], "two_tower": ranked["two_tower"][1][:k]}
-        for name in settings["diversity_bases"]:
-            values, members = ranked[name]
-            relevance = values[members]
-            ids = data.catalog_ids[members].tolist()
-            reward = np.nan_to_num(data.diversity.distances(ids)["combined"], nan=0.0)
-            lists[f"six_four_{name}"] = members[diverse_tail_order(relevance, reward, slots, k)]
-            for alpha in settings["fixed_alphas"]:
-                lists[f"fixed_{alpha:g}_{name}"] = members[greedy_rerank(relevance, reward, alpha, k)]
+        lists = case_lists(data, model, vectors, settings, prefix)
         for method, top in lists.items():
             rows.append(base | dict(method=method, **list_metrics(np.asarray(top), targets, reference,
                                                                   data.catalog_ids, data.categories,
@@ -357,10 +375,7 @@ def run_home_page(settings_path=Path("config/home_page.json"), output_root=None)
     print("[home] Catalog, popularity and co-click similarity from the training window", flush=True)
     data = HomeData(settings, knn_settings)
     if selection:
-        saved = json.loads((frozen_run / "home_settings.json").read_text())["settings"]
-        model = build_session_two_tower(data.names, data.category_ids, data.prices, data.popularity_inputs, saved)
-        model.load_state_dict(torch.load(frozen_run / "session_two_tower.pt"))
-        model.eval()
+        model = load_frozen_model(data, settings)
         training = dict(reused=str(frozen_run))
         log = pd.DataFrame()
     else:
