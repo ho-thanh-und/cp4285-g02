@@ -10,6 +10,8 @@
 # The 12 SASRec / GRU4Rec settings on ONE GPU, several at the same time.
 # Submit from the repository root:  sbatch scripts/cluster/sequence_grid_gpu.sh
 # Run 3 at a time instead of 4:     sbatch --export=ALL,PARALLEL=3 scripts/cluster/sequence_grid_gpu.sh
+# Only settings whose name contains a word (e.g. on a second GPU):
+#                                   sbatch --export=ALL,ONLY=gru4rec scripts/cluster/sequence_grid_gpu.sh
 #
 # Why parallel on one GPU: each model needs well under 2 GB of GPU memory, and
 # most of each setting's time is CPU work (the per-epoch check and the final
@@ -27,6 +29,7 @@ conda activate "${CONDA_ENV:-cp4285}"
 set -u
 
 PARALLEL="${PARALLEL:-4}"
+ONLY="${ONLY:-}"
 THREADS=$(( SLURM_CPUS_PER_TASK / PARALLEL ))
 [ "${THREADS}" -lt 1 ] && THREADS=1
 export OMP_NUM_THREADS="${THREADS}"
@@ -39,7 +42,7 @@ python -c "import sys, torch; print('torch', torch.__version__, 'cuda', torch.cu
 # Same settings as before; only the thread count per setting changes.
 python scripts/cluster/make_sequence_grid.py --threads "${THREADS}"
 python scripts/cluster/check_inputs.py
-echo "Running ${PARALLEL} settings at a time, ${THREADS} CPU threads each."
+echo "Running ${PARALLEL} settings at a time, ${THREADS} CPU threads each${ONLY:+, only names containing '${ONLY}'}."
 
 run_setting() {
     local config="$1" name
@@ -54,6 +57,9 @@ run_setting() {
 
 while read -r CONFIG; do
     [ -z "${CONFIG}" ] && continue
+    if [ -n "${ONLY}" ] && [[ "${CONFIG}" != *"${ONLY}"* ]]; then
+        continue
+    fi
     OUT=$(python -c "import json, sys; print(json.load(open(sys.argv[1]))['output_directory'])" "${CONFIG}")
     if ls "${OUT}"/*_validation/summary.csv >/dev/null 2>&1; then
         echo "=== skip (already finished): ${CONFIG}"

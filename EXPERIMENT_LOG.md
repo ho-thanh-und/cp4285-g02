@@ -1103,6 +1103,17 @@ cases, re-reading the raw CSV), so the 12 settings needed about 3 hours. With
 only one GPU available, `sequence_grid_gpu.sh` now runs four settings at a time
 on that GPU (16 CPU cores, 4 threads each), with one log per setting; the grid
 itself is unchanged.
+The re-submitted job (1097527) ran the older one-at-a-time script: it skipped the
+4 finished settings and trained the 4 dim-128 SASRec settings in about an hour.
+Check recall@10 so far:
+- dropout 0.5 clearly beats 0.2: with 0.2, recall peaks at epoch 3 (0.161-0.162
+  at dim 128) and then falls while the loss keeps dropping, i.e. overfitting;
+- dim 128 does not beat dim 64 (best: dim 64, 2 blocks, dropout 0.5, at least
+  0.180; dim 128, 2 blocks, dropout 0.5: 0.176).
+A second GPU became available, so the script gained `ONLY` (run only settings
+whose name contains a word): the 4 GRU4Rec settings run there with
+`ONLY=gru4rec`, and the old job is cancelled once its last SASRec setting is
+done.
 
 ## 6k. Exposure and popularity bias (ethics, selection data, 2026-11-09)
 

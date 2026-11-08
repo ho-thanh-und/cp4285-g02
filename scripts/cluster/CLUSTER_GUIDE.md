@@ -165,7 +165,16 @@ models are small, and most of each setting's time is CPU work (per-epoch check
 and final scoring), so sharing one GPU this way is about 3–4 times faster than
 one setting after another (that took about 14.5 minutes per setting). Each
 setting logs to `grid_logs/NAME.log`; finished settings are skipped on
-re-submission. The header uses the NUS `gpu` partition and `--gpus=a100-40:1`. Any GPU type is
+re-submission. The header uses the NUS `gpu` partition and `--gpus=a100-40:1`.
+
+To run only some settings, for example the GRU4Rec ones on a second GPU while
+another job is still busy, pass a word from their names:
+
+    sbatch --export=ALL,ONLY=gru4rec scripts/cluster/sequence_grid_gpu.sh
+
+Two jobs must not run the same setting: each would train it, wasting the GPU
+(results do not overwrite each other; the collector uses the newest finished
+run). Cancel the other job before it reaches those settings. Any GPU type is
 enough: the models need well under 2 GB of GPU memory, so a smaller type than
 `h100-96` usually starts sooner (`sinfo -o "%P %G"` lists the types). The models
 train on the GPU automatically when PyTorch can see one (`device` in the config:
