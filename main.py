@@ -2,7 +2,14 @@
 
 import argparse
 import os
+import sys
 from pathlib import Path
+
+# Find the package in src/ even when the project itself is not installed
+# (e.g. after `python -m pip install -r requirements.txt` on the cluster).
+_SOURCE = str(Path(__file__).resolve().parent / "src")
+if _SOURCE not in sys.path:
+    sys.path.insert(0, _SOURCE)
 
 # Ctrl+click this function to read the anonymous sample preparation code.
 from session_rerank.samples import prepare_samples

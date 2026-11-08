@@ -76,6 +76,11 @@ fails to build. Any batch script you write must itself run
 `source ~/miniconda3/etc/profile.d/conda.sh` and `conda activate cp4285`, as the
 project's job scripts do.
 
+The project code itself (`src/session_rerank`) is not installed by pip;
+`main.py` and the tests add `src/` to Python's search path themselves. (Before
+commit after `1ee7b9e`, every job failed with `No module named 'session_rerank'`;
+with an older checkout, submit with `--export=ALL,PYTHONPATH=$HOME/cp4285-g02/src`.)
+
 **Disk quota.** The environment needs about 1 GB with CPU torch (about 3 GB with
 the CUDA build) and the copied data about 0.9 GB. Check with `quota -s`; clear
 caches with `conda clean --all -y` and `rm -rf ~/.cache/pip`. If the home quota

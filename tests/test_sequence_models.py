@@ -58,6 +58,18 @@ def test_training_window_must_end_before_the_evaluation_weeks(tmp_path, window, 
             read_sequence_settings(path)
 
 
+def test_tensors_created_in_the_models_name_their_device():
+    # On the cluster's GPU, SASRec failed because forward() created its positions
+    # and causal mask on the CPU. Without a GPU here, guard the source instead:
+    # every tensor the model code creates must say which device it belongs to.
+    import inspect
+    from session_rerank import sequence_models
+    source = inspect.getsource(sequence_models.build_model)
+    created = [line.strip() for line in source.splitlines()
+               if any(f"torch.{f}(" in line for f in ("arange", "full", "zeros", "ones", "tensor", "empty"))]
+    assert created and all("device=" in line for line in created), created
+
+
 def test_device_setting_is_checked_and_auto_falls_back_to_cpu(tmp_path):
     from session_rerank.sequence_models import choose_device
     home = tmp_path / "home.json"

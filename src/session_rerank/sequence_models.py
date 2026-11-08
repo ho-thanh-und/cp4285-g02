@@ -119,8 +119,9 @@ def build_model(kind, products, settings):
 
         def forward(self, sequence):
             steps = sequence.shape[1]
-            x = self.items(sequence) * dim ** 0.5 + self.positions(torch.arange(steps))
-            causal = torch.triu(torch.full((steps, steps), float("-inf")), diagonal=1)
+            # Positions and mask must live on the input's device (GPU or CPU).
+            x = self.items(sequence) * dim ** 0.5 + self.positions(torch.arange(steps, device=sequence.device))
+            causal = torch.triu(torch.full((steps, steps), float("-inf"), device=sequence.device), diagonal=1)
             return self.norm(self.encoder(self.dropout(x), mask=causal))
 
     model = {"gru4rec": GRU4Rec, "sasrec": SASRec}[kind]()

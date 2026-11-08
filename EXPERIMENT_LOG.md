@@ -1084,7 +1084,17 @@ only the CPU path is tested here. The CUDA builds of torch are a one-time
 replacement described in the guides. The guides also record the first install
 problems on the cluster: Python 3.11 was only available from `conda-forge`, the
 home-directory disk quota was exceeded, and a batch job that did not activate
-the environment ran pip in the `base` environment (Python 3.13).
+the environment ran pip in the `base` environment (Python 3.13). The first GPU grid job (an
+A100 80 GB, MIG slice of 40 GB; `torch 2.5.1+cu124` saw the GPU and the input
+check passed) then failed on every setting with `No module named
+'session_rerank'`: pip installs only the libraries, not the project in `src/`.
+`main.py` and `tests/conftest.py` now add `src/` to the search path themselves
+(checked by running `main.py` from a copy with the installed package hidden). The
+second GPU job reached training on `cuda` and then failed in SASRec: its
+position indices and causal mask were created on the CPU while the model was
+on the GPU. Both are now created on the input's device; a test checks that every
+tensor the model code creates names its device (it fails on the old code). The
+CPU tests cannot run the GPU path itself, so the next cluster run is the check.
 
 ---
 
