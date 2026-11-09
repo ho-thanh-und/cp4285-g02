@@ -62,7 +62,41 @@ def clean_event(event):
     return kept
 
 
-def make_server(recommender, port=8000, log_path=Path("logs/interactions.jsonl"), host="127.0.0.1"):
+def nonnegative_integer(value, name):
+    if type(value) is not int or value < 0:
+        raise ValueError(f"{name} must be a non-negative integer")
+    return value
+
+
+def validate_recommendation(body, category=False):
+    """Reject malformed browser input before it reaches the model code."""
+    clicks = body.get("clicks", [])
+    if not isinstance(clicks, list) or len(clicks) > 10000:
+        raise ValueError("clicks must be a list with at most 10000 events")
+    for click in clicks:
+        if not isinstance(click, dict):
+            raise ValueError("each click must be a JSON object")
+        nonnegative_integer(click.get("item_id"), "item_id")
+        nonnegative_integer(click.get("time_ms"), "time_ms")
+        if click.get("kind", "click") not in ("click", "purchase"):
+            raise ValueError("event kind must be click or purchase")
+    if category:
+        nonnegative_integer(body.get("category_id"), "category_id")
+        if body.get("now_ms") is not None:
+            nonnegative_integer(body["now_ms"], "now_ms")
+        if body.get("limit") is not None:
+            limit = nonnegative_integer(body["limit"], "limit")
+            if not 1 <= limit <= 500:
+                raise ValueError("limit must be between 1 and 500")
+        if body.get("products") is not None:
+            products = body["products"]
+            if not isinstance(products, list) or len(products) > 10000:
+                raise ValueError("products must be a list with at most 10000 IDs")
+            for product in products:
+                nonnegative_integer(product, "product ID")
+
+
+def make_handler(recommender, log_path=Path("logs/interactions.jsonl")):
     lock = threading.Lock()
     log_path = Path(log_path)
 
@@ -83,9 +117,12 @@ def make_server(recommender, port=8000, log_path=Path("logs/interactions.jsonl")
 
         def body(self):
             length = int(self.headers.get("Content-Length") or 0)
-            if length > MAX_BODY:
-                raise ValueError("request too large")
-            return json.loads(self.rfile.read(length) or b"{}")
+            if not 0 <= length <= MAX_BODY:
+                raise ValueError("Content-Length must be between 0 and 1048576")
+            body = json.loads(self.rfile.read(length) or b"{}")
+            if not isinstance(body, dict):
+                raise ValueError("request must be a JSON object")
+            return body
 
         def do_OPTIONS(self):
             self.send(204, {})
@@ -108,9 +145,11 @@ def make_server(recommender, port=8000, log_path=Path("logs/interactions.jsonl")
             try:
                 body = self.body()
                 if self.path == "/recommend/home":
+                    validate_recommendation(body)
                     clicks = sorted(body.get("clicks", []), key=lambda c: c.get("time_ms", 0))
                     self.send(200, recommender.home([int(c["item_id"]) for c in clicks]))
                 elif self.path == "/recommend/category":
+                    validate_recommendation(body, category=True)
                     self.send(200, recommender.category(int(body["category_id"]), body.get("clicks", []),
                                                        body.get("now_ms"), body.get("products"), body.get("limit")))
                 elif self.path == "/log":
@@ -125,7 +164,11 @@ def make_server(recommender, port=8000, log_path=Path("logs/interactions.jsonl")
             except (KeyError, ValueError, TypeError, json.JSONDecodeError) as error:
                 self.send(400, dict(error=f"bad request: {error}"))
 
-    return ThreadingHTTPServer((host, port), Handler)
+    return Handler
+
+
+def make_server(recommender, port=8000, log_path=Path("logs/interactions.jsonl"), host="127.0.0.1"):
+    return ThreadingHTTPServer((host, port), make_handler(recommender, log_path))
 
 
 def serve(handoff, port=8000, log_path=Path("logs/interactions.jsonl"), host="127.0.0.1"):

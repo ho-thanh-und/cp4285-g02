@@ -74,7 +74,7 @@ class Recommender:
         if not self.home_policy.endswith(self.kind):
             raise ValueError(f"Home policy {self.home_policy} is not a {self.kind} policy")
         self.model = build_model(self.kind, len(self.vocab), self.model_settings)
-        self.model.load_state_dict(torch.load(folder / "home" / "model.pt", map_location="cpu"))
+        self.model.load_state_dict(torch.load(folder / "home" / "model.pt", map_location="cpu", weights_only=True))
         self.model.eval()
         self.weights = item_weights(self.model)
 

@@ -1,0 +1,784 @@
+{
+  "manifest_sha256": "487579de3202734d90c23efb6cf0a21c452160971f1b16783cacdf10f6ebe9b3",
+  "categories": [
+    {
+      "category_id": 47,
+      "name": "Electronics",
+      "featured": true,
+      "cover": 12862
+    },
+    {
+      "category_id": 780,
+      "name": "Kitchen appliances",
+      "featured": true,
+      "cover": 3147
+    },
+    {
+      "category_id": 1096,
+      "name": "Clothing",
+      "featured": true,
+      "cover": 79141
+    },
+    {
+      "category_id": 842,
+      "name": "Home furnishings",
+      "featured": true,
+      "cover": 35872
+    },
+    {
+      "category_id": 3,
+      "name": "Clothing collection 3",
+      "featured": false
+    },
+    {
+      "category_id": 9,
+      "name": "Kitchen appliances collection 9",
+      "featured": false
+    },
+    {
+      "category_id": 12,
+      "name": "Home furnishings collection 12",
+      "featured": false
+    },
+    {
+      "category_id": 14,
+      "name": "Clothing collection 14",
+      "featured": false
+    },
+    {
+      "category_id": 18,
+      "name": "Clothing collection 18",
+      "featured": false
+    },
+    {
+      "category_id": 42,
+      "name": "Clothing collection 42",
+      "featured": false
+    },
+    {
+      "category_id": 49,
+      "name": "Kitchen appliances collection 49",
+      "featured": false
+    },
+    {
+      "category_id": 72,
+      "name": "Home furnishings collection 72",
+      "featured": false
+    },
+    {
+      "category_id": 76,
+      "name": "Kitchen appliances collection 76",
+      "featured": false
+    },
+    {
+      "category_id": 82,
+      "name": "Kitchen appliances collection 82",
+      "featured": false
+    },
+    {
+      "category_id": 87,
+      "name": "Clothing collection 87",
+      "featured": false
+    },
+    {
+      "category_id": 88,
+      "name": "Home furnishings collection 88",
+      "featured": false
+    },
+    {
+      "category_id": 101,
+      "name": "Home furnishings collection 101",
+      "featured": false
+    },
+    {
+      "category_id": 108,
+      "name": "Kitchen appliances collection 108",
+      "featured": false
+    },
+    {
+      "category_id": 122,
+      "name": "Kitchen appliances collection 122",
+      "featured": false
+    },
+    {
+      "category_id": 132,
+      "name": "Clothing collection 132",
+      "featured": false
+    },
+    {
+      "category_id": 134,
+      "name": "Home furnishings collection 134",
+      "featured": false
+    },
+    {
+      "category_id": 137,
+      "name": "Home furnishings collection 137",
+      "featured": false
+    },
+    {
+      "category_id": 138,
+      "name": "Clothing collection 138",
+      "featured": false
+    },
+    {
+      "category_id": 139,
+      "name": "Kitchen appliances collection 139",
+      "featured": false
+    },
+    {
+      "category_id": 142,
+      "name": "Home furnishings collection 142",
+      "featured": false
+    },
+    {
+      "category_id": 151,
+      "name": "Clothing collection 151",
+      "featured": false
+    },
+    {
+      "category_id": 154,
+      "name": "Clothing collection 154",
+      "featured": false
+    },
+    {
+      "category_id": 163,
+      "name": "Kitchen appliances collection 163",
+      "featured": false
+    },
+    {
+      "category_id": 169,
+      "name": "Kitchen appliances collection 169",
+      "featured": false
+    },
+    {
+      "category_id": 222,
+      "name": "Clothing collection 222",
+      "featured": false
+    },
+    {
+      "category_id": 229,
+      "name": "Home furnishings collection 229",
+      "featured": false
+    },
+    {
+      "category_id": 233,
+      "name": "Home furnishings collection 233",
+      "featured": false
+    },
+    {
+      "category_id": 247,
+      "name": "Clothing collection 247",
+      "featured": false
+    },
+    {
+      "category_id": 248,
+      "name": "Kitchen appliances collection 248",
+      "featured": false
+    },
+    {
+      "category_id": 256,
+      "name": "Clothing collection 256",
+      "featured": false
+    },
+    {
+      "category_id": 278,
+      "name": "Home furnishings collection 278",
+      "featured": false
+    },
+    {
+      "category_id": 279,
+      "name": "Electronics collection 279",
+      "featured": false
+    },
+    {
+      "category_id": 302,
+      "name": "Home furnishings collection 302",
+      "featured": false
+    },
+    {
+      "category_id": 307,
+      "name": "Kitchen appliances collection 307",
+      "featured": false
+    },
+    {
+      "category_id": 342,
+      "name": "Kitchen appliances collection 342",
+      "featured": false
+    },
+    {
+      "category_id": 350,
+      "name": "Clothing collection 350",
+      "featured": false
+    },
+    {
+      "category_id": 352,
+      "name": "Electronics collection 352",
+      "featured": false
+    },
+    {
+      "category_id": 368,
+      "name": "Home furnishings collection 368",
+      "featured": false
+    },
+    {
+      "category_id": 371,
+      "name": "Electronics collection 371",
+      "featured": false
+    },
+    {
+      "category_id": 380,
+      "name": "Home furnishings collection 380",
+      "featured": false
+    },
+    {
+      "category_id": 393,
+      "name": "Home furnishings collection 393",
+      "featured": false
+    },
+    {
+      "category_id": 410,
+      "name": "Electronics collection 410",
+      "featured": false
+    },
+    {
+      "category_id": 415,
+      "name": "Home furnishings collection 415",
+      "featured": false
+    },
+    {
+      "category_id": 420,
+      "name": "Clothing collection 420",
+      "featured": false
+    },
+    {
+      "category_id": 421,
+      "name": "Home furnishings collection 421",
+      "featured": false
+    },
+    {
+      "category_id": 433,
+      "name": "Electronics collection 433",
+      "featured": false
+    },
+    {
+      "category_id": 438,
+      "name": "Clothing collection 438",
+      "featured": false
+    },
+    {
+      "category_id": 440,
+      "name": "Clothing collection 440",
+      "featured": false
+    },
+    {
+      "category_id": 445,
+      "name": "Home furnishings collection 445",
+      "featured": false
+    },
+    {
+      "category_id": 451,
+      "name": "Kitchen appliances collection 451",
+      "featured": false
+    },
+    {
+      "category_id": 458,
+      "name": "Electronics collection 458",
+      "featured": false
+    },
+    {
+      "category_id": 461,
+      "name": "Electronics collection 461",
+      "featured": false
+    },
+    {
+      "category_id": 470,
+      "name": "Home furnishings collection 470",
+      "featured": false
+    },
+    {
+      "category_id": 471,
+      "name": "Clothing collection 471",
+      "featured": false
+    },
+    {
+      "category_id": 484,
+      "name": "Home furnishings collection 484",
+      "featured": false
+    },
+    {
+      "category_id": 495,
+      "name": "Home furnishings collection 495",
+      "featured": false
+    },
+    {
+      "category_id": 497,
+      "name": "Home furnishings collection 497",
+      "featured": false
+    },
+    {
+      "category_id": 499,
+      "name": "Clothing collection 499",
+      "featured": false
+    },
+    {
+      "category_id": 500,
+      "name": "Electronics collection 500",
+      "featured": false
+    },
+    {
+      "category_id": 511,
+      "name": "Electronics collection 511",
+      "featured": false
+    },
+    {
+      "category_id": 514,
+      "name": "Home furnishings collection 514",
+      "featured": false
+    },
+    {
+      "category_id": 520,
+      "name": "Kitchen appliances collection 520",
+      "featured": false
+    },
+    {
+      "category_id": 540,
+      "name": "Kitchen appliances collection 540",
+      "featured": false
+    },
+    {
+      "category_id": 547,
+      "name": "Kitchen appliances collection 547",
+      "featured": false
+    },
+    {
+      "category_id": 550,
+      "name": "Home furnishings collection 550",
+      "featured": false
+    },
+    {
+      "category_id": 551,
+      "name": "Clothing collection 551",
+      "featured": false
+    },
+    {
+      "category_id": 553,
+      "name": "Kitchen appliances collection 553",
+      "featured": false
+    },
+    {
+      "category_id": 556,
+      "name": "Home furnishings collection 556",
+      "featured": false
+    },
+    {
+      "category_id": 562,
+      "name": "Kitchen appliances collection 562",
+      "featured": false
+    },
+    {
+      "category_id": 564,
+      "name": "Clothing collection 564",
+      "featured": false
+    },
+    {
+      "category_id": 571,
+      "name": "Home furnishings collection 571",
+      "featured": false
+    },
+    {
+      "category_id": 581,
+      "name": "Home furnishings collection 581",
+      "featured": false
+    },
+    {
+      "category_id": 582,
+      "name": "Home furnishings collection 582",
+      "featured": false
+    },
+    {
+      "category_id": 611,
+      "name": "Home furnishings collection 611",
+      "featured": false
+    },
+    {
+      "category_id": 631,
+      "name": "Clothing collection 631",
+      "featured": false
+    },
+    {
+      "category_id": 642,
+      "name": "Clothing collection 642",
+      "featured": false
+    },
+    {
+      "category_id": 666,
+      "name": "Home furnishings collection 666",
+      "featured": false
+    },
+    {
+      "category_id": 671,
+      "name": "Home furnishings collection 671",
+      "featured": false
+    },
+    {
+      "category_id": 679,
+      "name": "Kitchen appliances collection 679",
+      "featured": false
+    },
+    {
+      "category_id": 687,
+      "name": "Clothing collection 687",
+      "featured": false
+    },
+    {
+      "category_id": 700,
+      "name": "Kitchen appliances collection 700",
+      "featured": false
+    },
+    {
+      "category_id": 721,
+      "name": "Clothing collection 721",
+      "featured": false
+    },
+    {
+      "category_id": 722,
+      "name": "Clothing collection 722",
+      "featured": false
+    },
+    {
+      "category_id": 724,
+      "name": "Clothing collection 724",
+      "featured": false
+    },
+    {
+      "category_id": 727,
+      "name": "Clothing collection 727",
+      "featured": false
+    },
+    {
+      "category_id": 730,
+      "name": "Clothing collection 730",
+      "featured": false
+    },
+    {
+      "category_id": 743,
+      "name": "Electronics collection 743",
+      "featured": false
+    },
+    {
+      "category_id": 750,
+      "name": "Home furnishings collection 750",
+      "featured": false
+    },
+    {
+      "category_id": 766,
+      "name": "Kitchen appliances collection 766",
+      "featured": false
+    },
+    {
+      "category_id": 769,
+      "name": "Electronics collection 769",
+      "featured": false
+    },
+    {
+      "category_id": 773,
+      "name": "Kitchen appliances collection 773",
+      "featured": false
+    },
+    {
+      "category_id": 781,
+      "name": "Home furnishings collection 781",
+      "featured": false
+    },
+    {
+      "category_id": 784,
+      "name": "Clothing collection 784",
+      "featured": false
+    },
+    {
+      "category_id": 785,
+      "name": "Kitchen appliances collection 785",
+      "featured": false
+    },
+    {
+      "category_id": 792,
+      "name": "Clothing collection 792",
+      "featured": false
+    },
+    {
+      "category_id": 803,
+      "name": "Home furnishings collection 803",
+      "featured": false
+    },
+    {
+      "category_id": 807,
+      "name": "Home furnishings collection 807",
+      "featured": false
+    },
+    {
+      "category_id": 851,
+      "name": "Home furnishings collection 851",
+      "featured": false
+    },
+    {
+      "category_id": 863,
+      "name": "Clothing collection 863",
+      "featured": false
+    },
+    {
+      "category_id": 872,
+      "name": "Electronics collection 872",
+      "featured": false
+    },
+    {
+      "category_id": 885,
+      "name": "Clothing collection 885",
+      "featured": false
+    },
+    {
+      "category_id": 905,
+      "name": "Clothing collection 905",
+      "featured": false
+    },
+    {
+      "category_id": 909,
+      "name": "Kitchen appliances collection 909",
+      "featured": false
+    },
+    {
+      "category_id": 915,
+      "name": "Kitchen appliances collection 915",
+      "featured": false
+    },
+    {
+      "category_id": 917,
+      "name": "Kitchen appliances collection 917",
+      "featured": false
+    },
+    {
+      "category_id": 919,
+      "name": "Clothing collection 919",
+      "featured": false
+    },
+    {
+      "category_id": 924,
+      "name": "Home furnishings collection 924",
+      "featured": false
+    },
+    {
+      "category_id": 927,
+      "name": "Home furnishings collection 927",
+      "featured": false
+    },
+    {
+      "category_id": 941,
+      "name": "Kitchen appliances collection 941",
+      "featured": false
+    },
+    {
+      "category_id": 949,
+      "name": "Kitchen appliances collection 949",
+      "featured": false
+    },
+    {
+      "category_id": 952,
+      "name": "Electronics collection 952",
+      "featured": false
+    },
+    {
+      "category_id": 962,
+      "name": "Clothing collection 962",
+      "featured": false
+    },
+    {
+      "category_id": 964,
+      "name": "Clothing collection 964",
+      "featured": false
+    },
+    {
+      "category_id": 974,
+      "name": "Electronics collection 974",
+      "featured": false
+    },
+    {
+      "category_id": 1009,
+      "name": "Kitchen appliances collection 1009",
+      "featured": false
+    },
+    {
+      "category_id": 1020,
+      "name": "Clothing collection 1020",
+      "featured": false
+    },
+    {
+      "category_id": 1022,
+      "name": "Clothing collection 1022",
+      "featured": false
+    },
+    {
+      "category_id": 1025,
+      "name": "Kitchen appliances collection 1025",
+      "featured": false
+    },
+    {
+      "category_id": 1030,
+      "name": "Kitchen appliances collection 1030",
+      "featured": false
+    },
+    {
+      "category_id": 1031,
+      "name": "Clothing collection 1031",
+      "featured": false
+    },
+    {
+      "category_id": 1036,
+      "name": "Home furnishings collection 1036",
+      "featured": false
+    },
+    {
+      "category_id": 1044,
+      "name": "Clothing collection 1044",
+      "featured": false
+    },
+    {
+      "category_id": 1063,
+      "name": "Home furnishings collection 1063",
+      "featured": false
+    },
+    {
+      "category_id": 1075,
+      "name": "Home furnishings collection 1075",
+      "featured": false
+    },
+    {
+      "category_id": 1085,
+      "name": "Electronics collection 1085",
+      "featured": false
+    },
+    {
+      "category_id": 1108,
+      "name": "Home furnishings collection 1108",
+      "featured": false
+    },
+    {
+      "category_id": 1113,
+      "name": "Clothing collection 1113",
+      "featured": false
+    },
+    {
+      "category_id": 1114,
+      "name": "Home furnishings collection 1114",
+      "featured": false
+    },
+    {
+      "category_id": 1115,
+      "name": "Home furnishings collection 1115",
+      "featured": false
+    },
+    {
+      "category_id": 1117,
+      "name": "Clothing collection 1117",
+      "featured": false
+    },
+    {
+      "category_id": 1127,
+      "name": "Home furnishings collection 1127",
+      "featured": false
+    },
+    {
+      "category_id": 1137,
+      "name": "Electronics collection 1137",
+      "featured": false
+    },
+    {
+      "category_id": 1140,
+      "name": "Clothing collection 1140",
+      "featured": false
+    },
+    {
+      "category_id": 1141,
+      "name": "Clothing collection 1141",
+      "featured": false
+    },
+    {
+      "category_id": 1145,
+      "name": "Clothing collection 1145",
+      "featured": false
+    },
+    {
+      "category_id": 1159,
+      "name": "Home furnishings collection 1159",
+      "featured": false
+    },
+    {
+      "category_id": 1164,
+      "name": "Clothing collection 1164",
+      "featured": false
+    },
+    {
+      "category_id": 1174,
+      "name": "Kitchen appliances collection 1174",
+      "featured": false
+    },
+    {
+      "category_id": 1175,
+      "name": "Home furnishings collection 1175",
+      "featured": false
+    },
+    {
+      "category_id": 1182,
+      "name": "Home furnishings collection 1182",
+      "featured": false
+    },
+    {
+      "category_id": 1207,
+      "name": "Kitchen appliances collection 1207",
+      "featured": false
+    },
+    {
+      "category_id": 1215,
+      "name": "Clothing collection 1215",
+      "featured": false
+    },
+    {
+      "category_id": 1247,
+      "name": "Home furnishings collection 1247",
+      "featured": false
+    },
+    {
+      "category_id": 1249,
+      "name": "Home furnishings collection 1249",
+      "featured": false
+    },
+    {
+      "category_id": 1259,
+      "name": "Electronics collection 1259",
+      "featured": false
+    },
+    {
+      "category_id": 1265,
+      "name": "Home furnishings collection 1265",
+      "featured": false
+    },
+    {
+      "category_id": 1274,
+      "name": "Home furnishings collection 1274",
+      "featured": false
+    },
+    {
+      "category_id": 1285,
+      "name": "Clothing collection 1285",
+      "featured": false
+    },
+    {
+      "category_id": 1293,
+      "name": "Home furnishings collection 1293",
+      "featured": false
+    },
+    {
+      "category_id": 1297,
+      "name": "Home furnishings collection 1297",
+      "featured": false
+    }
+  ]
+}
