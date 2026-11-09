@@ -65,6 +65,7 @@ htmlcov/
 /tmp/
 /temp/
 *.log
+/logs/
 *.tmp
 *.part
 *.swp

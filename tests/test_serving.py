@@ -85,6 +85,39 @@ def test_home_cold_start_then_sasrec_with_six_four(recommender):
     assert personal and served["items"][:2] == recommender.catalog_ids[members[:2]].tolist()
 
 
+def test_home_pool_option_widens_only_the_discovery_places(handoff, recommender):
+    from session_rerank.adaptive_policies import diverse_tail_order
+    from session_rerank.sequence_models import ranked
+    wide = Recommender(handoff[0], home_pool=12)
+    assert recommender.page["pool_size"] == 6 and wide.page["pool_size"] == 12  # default unchanged
+    assert Recommender(handoff[0], home_pool=6).home_source == "six_four_sasrec"  # same as exported
+    served = wide.home([103, 107])
+    assert served["source"] == "six_four_sasrec_pool12" and served["diverse_positions"] == [3, 4]
+    assert served["items"][:2] == recommender.home([103, 107])["items"][:2]  # relevance places unchanged
+    rows = wide.item_index.loc[[103, 107]].tolist()
+    members, scores, _ = ranked(wide.model, rows, wide.vocab, wide.ids_to_rows, wide.fallback_rows, SEQUENCE,
+                                12, wide.weights)
+    reward = np.nan_to_num(wide.diversity.distances(wide.catalog_ids[members].tolist())["combined"], nan=0.0)
+    expected = wide.catalog_ids[members[diverse_tail_order(scores, reward, 2, 4)]].tolist()
+    assert served["items"] == expected  # 6 + 4 over the top 12, as scored in the analysis
+    for bad in (3, 1001):
+        with pytest.raises(ValueError):
+            Recommender(handoff[0], home_pool=bad)
+
+
+def test_click_order_last_moves_reclicked_products_to_the_end(handoff, recommender):
+    from session_rerank.serving import distinct_by_last_click
+    assert distinct_by_last_click([5, 3, 5, 7, 3]) == [5, 7, 3]
+    last = Recommender(handoff[0], click_order="last")
+    clicks = [103, 107, 110, 103]  # 103 clicked again at the end
+    assert last.home(clicks) == dict(recommender.home([107, 110, 103]), source="six_four_sasrec_last")
+    assert recommender.home(clicks) == recommender.home([103, 107, 110])  # default: first click, as tested
+    assert last.home([103, 107, 110])["items"] == recommender.home([103, 107, 110])["items"]  # no repeats: same
+    assert Recommender(handoff[0], home_pool=12, click_order="last").home(clicks)["source"] == "six_four_sasrec_pool12_last"
+    with pytest.raises(ValueError):
+        Recommender(handoff[0], click_order="middle")
+
+
 def test_home_with_only_products_unknown_to_sasrec_uses_its_fallback(recommender):
     served = recommender.home([135])  # in the catalog, not in SASRec's vocabulary
     assert served["source"].startswith("popularity") and 135 not in served["items"]

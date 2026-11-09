@@ -362,5 +362,11 @@
   "target_count": 598,
   "prepared_count": 6764,
   "missing_targets": [],
+  "all_products": {
+    "products_with_display_data": 184047,
+    "products_without_category": 0,
+    "categories_themed_by_links": 1039,
+    "categories_themed_by_id_modulo": 23
+  },
   "note": "One-hop targets from sampled paths; future sessions may reach unprepared products. Category IDs are anonymous."
 }

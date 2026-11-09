@@ -151,3 +151,100 @@ def test_display_catalog_validation_and_fallback(recommender, tmp_path, monkeypa
     (web / "catalog/products.json").write_text(json.dumps(catalog))
     with pytest.raises(ValueError, match="Invalid display metadata"):
         demo.make_demo_server(recommender, port=0)
+
+
+def prepared_web(recommender, tmp_path, monkeypatch, categories, products):
+    """A small display catalog whose one stored product matches the formula, like the real one."""
+    import hashlib
+    import session_rerank.demo as demo
+
+    web = tmp_path / "web"
+    (web / "catalog").mkdir(parents=True)
+    (web / "assets/products").mkdir(parents=True)
+    (web / "assets/products/catalog.png").write_bytes(b"image")
+    fingerprint = hashlib.sha256((recommender.folder / "manifest.json").read_bytes()).hexdigest()
+    (web / "catalog/categories.json").write_text(json.dumps({
+        "manifest_sha256": fingerprint, "categories": categories}))
+    (web / "catalog/products.json").write_text(json.dumps({
+        "manifest_sha256": fingerprint, "products": products}))
+    monkeypatch.setattr(demo, "WEB", web)
+    monkeypatch.setitem(recommender.manifest, "created_utc", "real")
+
+
+def test_display_record_reproduces_the_prepared_catalog():
+    import session_rerank.demo as demo
+
+    # Hand-picked from web/catalog/products.json (featured, supporting and a third theme);
+    # tokens are the raw name_tokens strings of the export catalog.
+    cases = [
+        (12862, 47, "14490,100014,776,162058,48552,48552", 0,
+         dict(item_id=12862, category_id=47, name="Wireless earbuds 12862", price=69, currency="SGD",
+              image=2, alt="Wireless earbuds")),
+        (75874, 3, "17147,17147,49319,136391,136391,9283,98967", 2,
+         dict(item_id=75874, category_id=3, name="Blue T-shirt 75874", price=25, currency="SGD",
+              image=8, alt="Blue T-shirt")),
+        (3147, 780, "26886,26881,26881,10987", 1,
+         dict(item_id=3147, category_id=780, name="Coffee maker 3147", price=75, currency="SGD",
+              image=7, alt="Coffee maker")),
+    ]
+    for item_id, category_id, tokens, theme, stored in cases:
+        assert demo.display_record(item_id, category_id, tokens, theme) == stored
+
+
+def test_unstored_product_in_a_themed_category_gets_computed_display_data(recommender, tmp_path, monkeypatch):
+    import session_rerank.demo as demo
+
+    prepared_web(recommender, tmp_path, monkeypatch,
+                 [{"category_id": 1, "name": "Electronics", "featured": True, "theme": 0}], [])
+    with running(recommender) as port:
+        items = json.loads(get(port, "/demo/products?ids=105,106")[1])["products"]
+        assert items[0] == demo.display_record(105, 1, "0,10", 0)  # toy tokens: "0,10"
+        assert items[0]["name"] and items[0]["price"] > 0 and items[0]["image"] in range(16) and items[0]["alt"]
+        assert items[1] == {"item_id": 106, "category_id": 2}  # category 2 has no theme
+
+
+def test_product_without_a_theme_shows_only_its_ids(recommender, tmp_path, monkeypatch):
+    prepared_web(recommender, tmp_path, monkeypatch,
+                 [{"category_id": 1, "name": "Electronics", "featured": True, "theme": 0}], [])
+    with running(recommender) as port:
+        items = json.loads(get(port, "/demo/products?ids=106,108")[1])["products"]
+        assert items == [{"item_id": 106, "category_id": 2}, {"item_id": 108, "category_id": 0}]
+
+
+def test_startup_check_rejects_a_changed_stored_record(recommender, tmp_path, monkeypatch):
+    import pytest
+    import session_rerank.demo as demo
+
+    record = demo.display_record(105, 1, "0,10", 0)
+    record["name"] = "Changed name 105"
+    prepared_web(recommender, tmp_path, monkeypatch,
+                 [{"category_id": 1, "name": "Electronics", "featured": True, "theme": 0}], [record])
+    with pytest.raises(ValueError, match="differs from the formula"):
+        demo.make_demo_server(recommender, port=0)
+
+
+def test_visit_logging_is_off_by_default_and_whitelisted_when_on(recommender, tmp_path):
+    from test_serving import call
+
+    with running(recommender) as port:  # default: no logging, /log closed
+        assert json.loads(get(port, "/demo/status")[1])["logging"] is False
+        assert call(port, "/log", {"session_id": "a", "event": "click", "page": "home", "time_ms": 1})[0] == 404
+    log_path = tmp_path / "logs" / "interactions.jsonl"
+    server = make_demo_server(recommender, port=0, log_path=log_path)
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        port = server.server_address[1]
+        assert json.loads(get(port, "/demo/status")[1])["logging"] is True
+        event = {"session_id": "visit-1", "event": "click", "page": "home", "time_ms": 1200, "item_id": 105,
+                 "position": 7, "list_source": "six_four_sasrec_pool100", "ip": "10.0.0.1", "email": "x@y.z"}
+        assert call(port, "/log", event) == (200, {"logged": True})
+        assert call(port, "/log", {"event": "click"})[0] == 400  # required fields missing
+        assert call(port, "/recommend/home", {"clicks": []})[0] == 200  # recommendations still served
+    finally:
+        server.shutdown()
+        server.server_close()
+    lines = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+    assert len(lines) == 1
+    assert "ip" not in lines[0] and "email" not in lines[0]  # only whitelisted fields are kept
+    assert lines[0]["item_id"] == 105 and lines[0]["position"] == 7 and "logged_date" in lines[0]

@@ -43,10 +43,27 @@ def distinct_in_order(item_ids):
     return ordered
 
 
+def distinct_by_last_click(item_ids):
+    """Clicked products in order of their last click (a re-clicked product moves to the end)."""
+    return list(reversed(distinct_in_order(reversed(list(item_ids)))))
+
+
+CLICK_ORDERS = {"first": distinct_in_order, "last": distinct_by_last_click}
+
+
 class Recommender:
     """All three pages from one hand-off folder. Loading takes a few seconds; calls are fast."""
 
-    def __init__(self, folder):
+    def __init__(self, folder, home_pool=None, click_order="first"):
+        """`home_pool` replaces the exported 6 + 4 pool (20, the frozen and tested
+        setting) for the website only, e.g. 100 (EXPERIMENT_LOG.md 6p: chosen after
+        the final test and not part of it; its lists are labelled with the pool size).
+        `click_order` "last" orders re-clicked products by their last click instead of
+        their first (the trained and tested rule); chosen for the website after the
+        validation and selection weeks (6r); its lists are labelled `_last`."""
+        if click_order not in CLICK_ORDERS:
+            raise ValueError(f"click_order must be one of {sorted(CLICK_ORDERS)}")
+        self.click_order = click_order
         import lightgbm as lgb
         import torch
         from .core import tokens
@@ -65,6 +82,14 @@ class Recommender:
         # Home page.
         home = json.loads((folder / "home" / "settings.json").read_text(encoding="utf-8"))
         self.page, self.model_settings, self.home_policy = home["page"], home["model"], home["policy"]
+        self.home_source = self.home_policy
+        if home_pool is not None and int(home_pool) != self.page["pool_size"]:
+            if "six_four" not in self.home_policy or not self.page["top_k"] <= int(home_pool) <= 1000:
+                raise ValueError(f"home_pool must be between {self.page['top_k']} and 1000 for a 6 + 4 policy")
+            self.page = dict(self.page, pool_size=int(home_pool))
+            self.home_source = f"{self.home_policy}_pool{int(home_pool)}"
+        if click_order == "last":
+            self.home_source += "_last"
         self.popular_ids = np.load(folder / "home" / "popular_item_ids.npy")
         vocab_rows = self.item_index.loc[np.load(folder / "home" / "vocabulary_item_ids.npy")].to_numpy()
         self.vocab = pd.Series(np.arange(1, len(vocab_rows) + 1), index=vocab_rows)
@@ -105,7 +130,8 @@ class Recommender:
         """Ten products for the home page given the session's clicked products so far."""
         from .sequence_models import diverse_lists, ranked
         k = self.page["top_k"]
-        known = [int(i) for i in distinct_in_order(clicked_item_ids) if int(i) in self.item_index.index]
+        ordered = CLICK_ORDERS[self.click_order](clicked_item_ids)
+        known = [int(i) for i in ordered if int(i) in self.item_index.index]
         if not known:
             items = [int(i) for i in self.popular_ids[:k]]
             return dict(page="home", items=items, source="popularity (no click yet)", diverse_positions=[])
@@ -120,7 +146,7 @@ class Recommender:
             top = lists[self.home_policy[:-len(self.kind) - 1]]  # e.g. six_four_sasrec -> six_four
         slots = self.page["relevance_slots"]
         return dict(page="home", items=self.catalog_ids[top].astype(int).tolist(),
-                    source=self.home_policy if personal else "popularity (no clicked product known to SASRec)",
+                    source=self.home_source if personal else "popularity (no clicked product known to SASRec)",
                     diverse_positions=list(range(slots + 1, len(top) + 1)) if "six_four" in self.home_policy else [])
 
     # ---------------------------------------------------------------- item ---

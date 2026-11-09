@@ -1754,6 +1754,638 @@ instead (no accent bars or edge stripes, no decorative rules).
 
 ---
 
+## 6p. Review of hct's shopping demo and model export (2026-11-09)
+
+hct pushed `e269cd8` ("add shopping demo"): a local Clew website (`web/`,
+`src/session_rerank/demo.py`, `scripts/run_demo.py`), fictional display data
+for 6,764 products (`web/catalog/`, made by `scripts/prepare_demo_catalog.py`),
+input validation in `api.py`, `weights_only=True` when loading SASRec in
+`serving.py`, and `tests/test_demo.py`. The display catalog is pinned to the
+SHA-256 of hct's own export, `results/handoff/20261109T100233Z`, which is not
+in git; the user supplied it as a zip.
+
+**The zip.** Exactly the 12 export files, no code, no unsafe paths. Extracted
+to a scratch folder (not into `results/`).
+
+**Compared with our export (`20261108T203934Z`).**
+- Byte-identical: SASRec `model.pt`, LightGBM `model.txt`, the "You may also
+  like" table, vocabulary, fallback and popularity lists, catalog.
+- `home/settings.json`, `category/settings.json`: same content, Unix line
+  endings instead of Windows ones.
+- `category/product_stats.parquet`: `window_click_rate` differs in 27,033 of
+  184,047 rows by at most 2.4e-7 (float32 rounding from another machine).
+- Manifest: made from commit `2d35207` (our report commit); its checksums
+  match its files.
+
+**Independent re-verification** with `handoff.verify_*` against
+`results/confirmation/20261108T193024Z_confirmation`, stricter than the
+export's own check (every home case, not every 10th):
+
+| Check | Result |
+|---|---|
+| Home page (SASRec + 6 + 4) | 20,000 of 20,000 lists identical |
+| Item page | 20,000 of 20,000 pages identical NDCG (mean 0.0954) |
+| Category pages | 952 of 952 queries identical NDCG (mean 0.1843) |
+
+**The demo.** `bundle_issues` reports no issues and the catalog fingerprint
+matches the export. Run on hct's export, a walk-through (category 47 →
+product 12862 → related product 129045 → home) showed exactly the lists our
+own export returns for the same requests; the home page switched to SASRec +
+6 + 4 with discovery picks in places 7–10. `clew.js` displays API results in
+order without filtering. No horizontal scroll at 375 px. The 16 demo and
+serving tests pass on Windows.
+
+**Notes for the team.**
+- On Windows, `prepare_demo_catalog.py` crashes inside LightGBM ("access
+  violation") because it imports pandas before the model code (an OpenMP
+  clash between PyTorch and LightGBM). Importing `lightgbm` first fixes it.
+  Rebuilt from our export, the catalog is identical apart from the
+  fingerprint. The demo server itself is not affected.
+- Because the catalog is pinned to one export's fingerprint, the demo starts
+  only with hct's export, even though ours gives the same recommendations.
+- `web/README.md` uses `.venv/bin/python` (macOS/Linux); on Windows it is
+  `.venv\Scripts\python`.
+- Category pages in the demo rank whole categories; the reported experiment
+  ranked logged lists (the README says so).
+
+**A simulated visit** (user request; product names are fictional labels from
+a hash of the anonymous name tokens, so only categories are real):
+fresh home (popularity: 8 of 10 Electronics) → Kitchen appliances → product
+40965 → related 10607 → home: all 10 "For you" in Kitchen appliances → Clothing
+→ product 35311 → home: all 10 in Clothing; the two kitchen clicks no longer
+show. Related lists stayed in the clicked product's category (one exception,
+a product from a supporting category).
+
+**What this showed about 6 + 4 on the home page**, measured on the final
+test (`results/sequence_models/20261108T200822Z_confirmation/lists.parquet`,
+20,000 cases, categories from the export catalog):
+
+| Home policy | Categories per list | Lists with one category | Places 7–10 add a new category |
+|---|---|---|---|
+| SASRec | 1.64 | 77% | 18% |
+| **SASRec + 6 + 4 (frozen)** | 2.05 | 67% | 32% |
+| SASRec + fixed 0.8 | 1.75 | 73% | 21% |
+
+The four discovery places usually differ by product name, not by category.
+The STePS banner and page text ("six shoes like yours plus four to discover,
+such as a sports bag or a cap") overstate this for the home page. The "2.6
+categories per list" figure is for related products and is correct as stated.
+
+**Why: the model, not the display catalog.** The catalog only supplies names,
+prices and pictures; it does not change which products are recommended. On
+the home page SASRec scores all 58,804 products in its vocabulary (of
+184,047), keeps its top 20, and 6 + 4 chooses from those 20. For mixed visits
+SASRec's top 20 (and nearly all of its top 100) is the latest clicked
+category; the earlier interest first appears at place 220 (kettle, coffee
+maker, jacket), 157 (electronics, then clothing) or 664 (clothing, then
+electronics).
+
+**Real shoppers behave this way too** (April, the training month, 43,244
+sessions with 2+ distinct clicks; 26% span 2+ categories). For the 29,371 next
+clicks made after a session already had 2+ categories: 71% stay in the latest
+category, 26% go to a new category, 3% return to an earlier one. SASRec
+follows the latest interest because the data rewards it; showing both
+interests would serve the 3% case. The 26% "new category" share is where the
+discovery places could help and mostly do not (32% of lists, above).
+
+No change made: the home policy stays as frozen and tested. Options put to
+the user: keep it and correct the STePS wording; or a demo-only variant (for
+example, discovery places drawn from a wider pool) that would have to be
+chosen on the validation week and labelled as not part of the final test.
+
+**Variant tested on the validation week (user request):
+`six_other_categories_sasrec`** (`scripts/analysis/home_other_categories.py`,
+`results/home_other_categories/20261109T140938Z_validation`). Places 1–6:
+SASRec's best six. Places 7–10: walking down SASRec's top 1,000, the best
+product of each category not among the first six's categories, one per
+category. Declared before the run: the 6 + 4 rule (at most 5% NDCG loss
+against plain SASRec; then most ILD). Same 20,000 cases and saved model as
+§6j; plain SASRec and 6 + 4 were recomputed and matched the saved run exactly.
+The final test was not used.
+
+| Home policy (validation week) | NDCG@10 | vs SASRec | Hit rate | Categories per list | ILD | Places 7–10 catch a later click | Same, when the shopper later clicks a category the six do not show (6,545 cases) |
+|---|---|---|---|---|---|---|---|
+| SASRec | 0.1379 | — | 0.379 | 1.54 | 0.513 | 16.2% | 12.6% |
+| SASRec + 6 + 4 (frozen) | 0.1329 | −3.6% | 0.364 | 1.92 | 0.554 | 13.8% | 11.4% |
+| 6 + 4 from other categories | 0.1125 | **−18.5%** | 0.297 | 5.29 | 0.828 | 0.6% | 1.7% |
+
+Against the frozen 6 + 4: NDCG −0.020 (−0.024, −0.018), hit rate −0.066
+(−0.071, −0.062), categories +3.37 (+3.34, +3.40).
+
+**Result: rejected by the declared rule** (−18.5%, limit −5%). The four places
+always show four new categories, but they almost never catch the shopper's
+next interest: even when the shopper does move to a category the first six do
+not show, SASRec's best product from another category is clicked later in 1.7%
+of cases, against 11.4% for the frozen four. Where a shopper goes next is not
+predictable from the session; variety across categories costs accuracy without
+buying discovery clicks in this data. The frozen home policy is unchanged.
+
+**Two-tower for the discovery places (user idea: the two-tower filters to
+related products, then the most diverse are taken)**
+(`scripts/analysis/home_two_tower_tail.py`,
+`results/home_two_tower_tail/20261109T142635Z_validation`; same cases, rule
+and reproduction check as above; the session two-tower of §6g, trained April).
+Places 1–6: SASRec's best six. Places 7–10: (a) the four most mutually
+different among the two-tower's top 20; (b) the two-tower's best product of
+each category the six do not show (its top 100; next best fill in).
+
+| Home policy (validation week) | NDCG@10 vs SASRec | Categories per list | Places 7–10 add a new category | Places 7–10 catch a later click | Same, in the 6,545 new-category cases |
+|---|---|---|---|---|---|
+| SASRec + 6 + 4 (frozen) | −3.6% | 1.92 | 30% | 13.8% | 11.4% |
+| (a) 6 + two-tower's 4 most different | −5.6% | 1.45 | 9% | 12.3% | 11.0% |
+| (b) 6 + two-tower's best per new category | −6.4% | 2.01 | 25% | 11.2% | 9.9% |
+
+Both fail the declared 5% rule, and neither beats the frozen 6 + 4 on variety
+or on discovery clicks. (a) is less varied than plain SASRec: the two-tower's
+top 20 is almost always the last clicked category (§6g: 99%). (b) finds a
+product from another category in its top 100 only for a quarter of lists.
+Its cross-category picks are clicked far more often than SASRec's best per
+other category (9.9% against 1.7% in new-category cases), but still less
+than the frozen four.
+
+**Wider pool for 6 + 4 (user idea: the four from SASRec's top 100)**
+(`scripts/analysis/home_wider_pool.py`,
+`results/home_wider_pool/20261109T143954Z_validation`; same cases, model and
+distance as the frozen 6 + 4; plain SASRec and the pool-20 version reproduce
+the saved run exactly). Reported under the declared 6 + 4 rule and under the
+user's split view (places 1–6 judged on relevance, places 7–10 on discovery):
+
+| Places 7–10 from SASRec's… | NDCG@10 vs SASRec | NDCG@6 | Categories per list | 7–10 add a new category | 7–10 catch a later click | Same, in the 6,545 new-category cases |
+|---|---|---|---|---|---|---|
+| (plain SASRec) | — | 0.120 | 1.54 | 16% | 16.2% | 12.6% |
+| top 20 (frozen) | −3.6% | 0.120 | 1.92 | 30% | 13.8% | 11.4% |
+| top 50 | −6.9% | 0.120 | 2.61 | 56% | 11.4% | 9.7% |
+| top 100 | −9.9% | 0.120 | 3.33 | 77% | 9.2% | 8.1% |
+| top 200 | −11.9% | 0.120 | 4.00 | 96% | 7.3% | 7.0% |
+
+Against the frozen pool of 20, pool 100: NDCG@10 −0.0086 (−0.0104, −0.0069),
+categories +1.41 (+1.38, +1.44), new category in 7–10 +47 points, later
+clicks in 7–10 in new-category cases −3.3 points (−4.0, −2.6).
+
+- **Under the declared 6 + 4 rule only the frozen pool of 20 passes**; the
+  frozen policy stands for the report and the tested result.
+- **Under the split view** places 1–6 are identical (NDCG@6 0.120) and the
+  pool size is a smooth dial for places 7–10: more categories, fewer later
+  clicks. Of every way of filling 7–10 tried today, a wider SASRec pool gives
+  the most cross-category variety for the clicks it keeps (pool 100: a new
+  category in 77% of lists while still catching a later click in 8.1% of
+  new-category cases; two-tower per category: 25% and 9.9%; SASRec best per
+  other category: 100% and 1.7%).
+- Five home variants were tried on the validation week today; any one adopted
+  must be checked on the selection week first. No change made to the frozen
+  export or the demo.
+
+**Selection-week check of pool 100 (user request; criteria written here
+before the run).** Only pool 100 against the frozen pool of 20, on the
+selection week's 20,000 cases (`results/sequence_models/20261108T182139Z_selection`,
+same frozen SASRec). Pool 100 is confirmed as the website's discovery setting
+(a design choice after the final test, not part of the tested result) if all
+three hold:
+1. places 1–6 are identical to the frozen policy's (NDCG@6 equal);
+2. places 7–10 add a category the six do not show in at least 70% of lists
+   (validation: 77%), with the difference to pool 20 above zero;
+3. in cases where the shopper later clicks a category the six do not show,
+   places 7–10 catch a later click in at least 7% (validation: 8.1%).
+NDCG@10 is reported alongside (validation: −9.9% against plain SASRec). The
+final test is not used.
+
+Result (`results/home_wider_pool/20261109T145008Z_selection`; plain SASRec and
+pool 20 reproduce the saved selection run exactly):
+
+| Selection week | NDCG@10 vs SASRec | NDCG@6 | Categories per list | 7–10 add a new category | 7–10 catch a later click | Same, in the 7,009 new-category cases |
+|---|---|---|---|---|---|---|
+| (plain SASRec) | — | 0.1039 | 1.59 | 17% | 14.1% | 8.2% |
+| pool 20 (frozen) | −3.3% | 0.1039 | 2.00 | 32% | 12.2% | 7.5% |
+| pool 100 | −9.3% | 0.1039 | 3.41 | 79% | 7.5% | **4.8%** |
+
+Pool 100 against pool 20: NDCG@10 −0.0073 (−0.0079, −0.0066); new category in
+7–10 +47 points (+46, +48); later clicks in 7–10 in new-category cases −2.7
+points (−3.3, −2.1).
+
+- Criterion 1 holds (NDCG@6 identical); criterion 2 holds (79%, difference
+  above zero); **criterion 3 fails (4.8% < 7%)**. **Pool 100 is not confirmed.**
+- The whole selection week has fewer such clicks (the frozen four: 7.5%
+  against 11.4% on validation), so the absolute 7% threshold was strict for
+  this week; relative to the frozen four, pool 100 keeps 64% of them here and
+  71% on validation. The criterion is kept as written: the check failed.
+- The frozen home page (pool 20) stays in the export and the demo. Pool 100
+  goes to the report as tested-and-not-confirmed further work: it buys a new
+  category in most lists at the cost of about a third of the discovery clicks.
+
+**User decision (2026-11-09): the website uses pool 100 anyway** ("4% is not
+bad"). This is a product choice made after the final test, against a failed
+pre-declared criterion; the report's tested home page remains SASRec + 6 + 4
+over the top 20, and all final-test numbers refer to it.
+- Implemented as a runtime option, not a new export: `Recommender(folder,
+  home_pool=100)`, `scripts/run_demo.py --home-pool 100`. The verified export
+  and its checksums are unchanged; the default is still the exported 20. With
+  another pool the home lists are labelled `six_four_sasrec_pool100`, so the
+  website's `/log` records tell the two apart; `/demo/status` reports the pool.
+- Checks: new test `test_home_pool_option_widens_only_the_discovery_places`
+  (places 1–2 of the toy model unchanged, lists equal to the analysis's
+  `diverse_tail_order` over the wider pool, invalid pools rejected); serving
+  and demo tests 17 passed. On real data, the served pool-100 home page gave
+  identical NDCG to the selection-week analysis on 2,000 of 2,000 checked
+  cases (every 10th).
+- Demo restarted on hct's export with `--home-pool 100`. Example: earbuds then
+  jacket now shows two discovery products from other categories.
+
+**Display-catalog gap found.** The demo's display data (`web/catalog/`)
+covers 6,764 products, 3% of SASRec's 58,804-product vocabulary. On every
+20th selection-week case, about 90% of home-page products had no display name,
+picture or price, with pool 20 (89%) and pool 100 (90%) alike; the demo shows
+them as "Product <id>, image unavailable". Walk-throughs that start from the
+four featured categories hide this. Extending the catalog (every product the
+home page, related products and category links can reach) is a change to
+hct's catalog script and data; not done yet.
+
+---
+
+## 6q. Display catalog for every product (2026-11-09)
+
+The §6p gap is closed: every product in the export catalog
+(`results/handoff/20261109T100233Z/catalog.parquet`, 184,047 products) now
+shows a fictional name, picture and price in the Clew demo, and every
+categorized product's category has a theme. The 6,764 stored records are
+byte-for-byte unchanged (`web/catalog/products.json` has no diff); the rest
+are computed on request instead of being stored, so no large data file is
+added.
+
+**What changed.** `scripts/prepare_demo_catalog.py` now takes the export
+folder from a `--handoff` argument (default `results/handoff/20261109T100233Z`,
+previously hard-coded), imports `lightgbm` before `pandas`/`torch` (Windows
+OpenMP clash, §6p), and writes `categories.json` with a `theme` (0–3) for
+every one of the export's 1,217 categories: the 155 existing entries are kept
+exactly, with their theme added (featured = their THEMES row, supporting = the
+theme their name already states), and 1,062 new entries
+`{"name": "<Theme> collection <id>", "featured": false, "theme": ...}` are
+appended. `products.json` and `coverage.json` are unchanged apart from a new
+`all_products` key in `coverage.json`. `asset-sources.json` is unchanged.
+`src/session_rerank/demo.py` gained `display_record(item_id, category_id,
+name_tokens, theme)` — the same formula as before (type = first byte of the
+SHA-256 of the sorted unique name tokens, mod 4; name, SGD price and picture
+from TYPES; picture = theme * 4 + type) — now the single source of the
+formula, used by the script too. At startup the demo reads the raw
+`name_tokens` strings from the export catalog once and checks every stored
+record in `products.json` against `display_record`, failing if any differ
+(the shipped catalog passes). `/demo/products` returns the stored record if
+the product has one, otherwise the computed record for its category's theme,
+otherwise `{item_id, category_id}` as before. Products without a category
+would still show only "Product <id>"; this export has none.
+
+**How themes are assigned** (categories not among the 155): for each such
+category, count the themes of the related products (from
+`item/you_may_also_like.parquet`, one row per product with −1 padding) whose
+category already has a theme; the most frequent theme wins, ties to the lower
+theme number; repeat over the still-unthemed categories until none new gets a
+theme; anything left gets `category_id % 4`.
+
+**Counts** (`coverage.json` → `all_products`):
+products with display data 184,047; products without (no category) 0;
+categories themed by links 1,039; categories themed by category_id % 4 23.
+
+**Tests** (`uv run python -m pytest tests/test_demo.py tests/test_serving.py
+-q --basetemp C:\Users\namnd\AppData\Local\Temp\pytest_clew`):
+`21 passed, 14 warnings in 7.17s` (17 before, 4 new: display_record
+reproduces three hand-picked stored records; an unstored product in a themed
+category gets a full record; a product without a theme returns only
+{item_id, category_id}; the startup check rejects a changed stored record).
+
+**Acceptance checks.**
+1. `git diff --stat web/catalog/products.json web/catalog/coverage.json` →
+   `web/catalog/coverage.json | 6 ++++++` only (products.json: no diff;
+   coverage.json: only the `all_products` key added). *(Corrected in review:
+   the first version of this entry quoted `8 +++++++-`, which the command
+   does not print.)*
+2. `uv run python scripts/run_demo.py --handoff results/handoff/20261109T100233Z
+   --home-pool 100 --port 8000` printed `Home page: 6 + 4 over SASRec's top
+   100` and started without errors.
+3. 2,000-product samples, `missing` = products without display data:
+   `SASRec vocabulary missing: 0 of 2000`; `catalog with category missing:
+   0 of 2000`; `related products missing: 0 of 2000`.
+4. `POST /recommend/home` with clicks 12862 then 35311 returned
+   [79178, 5414, 5413, 5450, 35734, 35380, 79156, 46952, 11718, 12401] and
+   with no clicks [14614, 376301, 12862, 89764, 34797, 3147, 79141, 375069,
+   375755, 377298] — the same lists as before the change. Products 11718
+   ("Grey throw blanket 11718", SGD 45, image 15) and 12401 ("Black trousers
+   12401", SGD 49, image 10) now have display data. A browser walkthrough
+   (Electronics → product 12862 → related 129045 → home) showed a name,
+   picture and price on every card.
+
+No change to any recommendation or its order; nothing under `results/` was
+modified.
+
+**Independent review (2026-11-09).** The work above was done by another model
+from a written prompt; every claim was re-checked:
+- `results/handoff/20261109T100233Z` in the repository is byte-identical to
+  the zip verified in §6p; `bundle_issues` reports none.
+- The 155 earlier categories are unchanged apart from the added `theme`, and
+  each theme agrees with the category's name; the fingerprint is unchanged.
+- An independent re-implementation of the link voting gives the same theme
+  for all 1,217 categories (2 voting rounds, 23 by `category_id % 4`).
+  Products per theme: Electronics 13%, Kitchen appliances 11%, Clothing 39%,
+  Home furnishings 36% (SASRec's products: 13/11/41/34%).
+- `display_record` reproduces all 6,764 stored records; the three test
+  records are real entries with the export's own token strings.
+- Tests: demo + serving 21 passed; full suite 236 passed plus the 2 known
+  Windows failures (§1).
+- Live demo (export above, `--home-pool 100`): acceptance checks 3 and 4
+  reproduced exactly. On real selection-week visits (every 20th case, 1,000
+  visits through the site's own API), home-page products without display data
+  fell from about 90% (§6p) to 0 of 10,000.
+- Corrections: acceptance check 1's quoted output (fixed above); a stale
+  README sentence saying unprepared items still occur (reworded).
+- Noted, not changed: the startup check skips stored products whose category
+  has no theme (allowed for small test fixtures). Every shipped category has
+  one, so the shipped catalog is fully checked.
+
+---
+
+## 6r. Browsing test of the demo website (2026-11-09)
+
+User request: browse like a real shopper and test the site. Demo on
+`results/handoff/20261109T100233Z` with `--home-pool 100` and the full
+display catalog (§6q), in the desktop app's browser with real mouse clicks
+and key presses (desktop size, plus 375 px phone width).
+
+**Sessions.**
+1. *One interest (electronics):* Electronics → headphones 376301 → related
+   speaker 169683 → logo to home. "For you" shows 10 Electronics products;
+   SASRec's top 100 is all Electronics here, so the four discovery places are
+   other electronics (three speakers, earbuds).
+2. *Two interests (kitchen, then home furnishings), after "Start new session":*
+   Kitchen appliances → kettle 40965 → Home furnishings → cushion 12996 → home.
+   Places 1–7 Home furnishings; places 8–10 from three other categories
+   (Home furnishings collections 781 and 807, Clothing collection 350). The
+   kettle no longer shows (SASRec follows the latest interest, §6p).
+
+**Works.** Category, product, related-product and logo navigation; every card
+has name, picture and price; "Start new session" returns home to "Popular
+now"; Back/Forward do not add clicks (home list identical after back, back,
+forward, forward); reload starts a fresh visit (as the README says); keyboard
+only: Tab shows a visible focus ring, Enter opens a product and counts as a
+click; no horizontal scroll at 375 px; malformed links (`#/item/abc`,
+`#/nonsense`, `#/item/-5`) fall back to home; unknown category shows "No
+products available"; category ranking answers in 0.1–0.3 s (largest category,
+3,851 products: 0.12 s); no server errors; the only browser error is the 404 of
+the deliberately unknown product.
+
+**Findings (not fixed).**
+1. **No interaction logging.** `clew.js` never calls `/log`, and the demo
+   server answers `POST /log` with 404 "unknown path" (it only allows the two
+   `/recommend` POSTs). The plan to judge the home page online (§8.1), and to
+   compare pool 20 with pool 100 on real clicks, cannot run on this site yet.
+2. **Discovery places are not marked.** Nothing shows that places 7–10 are
+   deliberate variety; a T-shirt after rugs looks like a mistake.
+3. **A clicked product jumps up its category.** Clicked at place 15 in
+   Clothing, it was at place 2 on return (the ranker's `session_item_clicks`,
+   known from §6m).
+4. **Reload loses the visit** (clicks live only in page memory).
+5. **Category pages stop at 40 products** ("Show more" goes from 20 to 40 and
+   disappears), even for categories with thousands.
+6. **Unknown product** shows "Product could not be loaded" with a "Try again"
+   button that can never succeed; "not found" would be accurate.
+7. **Blank page for about 1.5 s on first load** (no loading text before the
+   status and categories arrive).
+8. Visual repetition: 16 pictures for 184,047 products (cosmetic).
+
+**Fixes (user request, same day)** in `web/clew.js`, `web/index.html`,
+`web/clew.css`, `src/session_rerank/demo.py`, `scripts/run_demo.py` and
+`.gitignore`. No recommendation code or order changed.
+
+1. **Logging, opt-in.** hct had deliberately closed `/log` in the demo (test
+   `test_clew_serves_only_its_assets_and_disables_visit_logging`), and
+   HANDOFF.md §4 requires a visible notice. So logging is now a start
+   option: `run_demo.py --log` (`make_demo_server(..., log_path=...)`),
+   writing to `logs/interactions.jsonl` (`/logs/` added to `.gitignore`).
+   - Off by default: `/log` is still 404 and hct's test still passes.
+   - When on: `/demo/status` reports `logging: true`, the footer shows a
+     notice, and the page posts `impression` events (page, shown IDs, list
+     source, category or product) and `click` events (product, 1-based
+     position, list source) with a random per-visit ID. The existing
+     whitelist in `api.clean_event` keeps only HANDOFF.md fields; the date is
+     stored, not the time of day.
+2. **Discovery places labelled.** Places in `diverse_positions` get a
+   "Something different" label on the picture, and the list has a one-line
+   caption.
+3. **Clicked products marked.** "Viewed" label on any product clicked in the
+   visit. The ranker's behaviour is unchanged; the label explains the jump.
+4. **Reload keeps the visit.** Clicks, start time and visit ID are kept in
+   `sessionStorage`; time is now measured with `Date.now()` so it survives a
+   reload. "Start new session" makes a new visit ID.
+5. **Category paging.** The page requests the API's maximum (500) once and
+   reveals 20 at a time with "Showing X of Y products"; at the end it says
+   "the top 500 for this visit". The button is disabled while a batch loads.
+6. **Unknown product.** A 404 now shows "Product not found" with a link home,
+   no retry.
+7. **First paint.** `index.html` shows "Loading Clew…" until the first data
+   arrives.
+
+**Checks.**
+- New test `test_visit_logging_is_off_by_default_and_whitelisted_when_on`:
+  closed by default; when on, an event with extra `ip` and `email` fields is
+  stored without them, and an event missing required fields is refused.
+- Demo + serving tests 22 passed; full suite 237 passed plus the 2 known
+  failures; `node --check web/clew.js` passes.
+- In the browser (demo with `--home-pool 100 --log`, real clicks):
+  - Kitchen → kettle → Home furnishings → cushion → home showed the caption
+    and four "Something different" labels in places 7–10.
+  - Reload kept "For you" and both clicks.
+  - The cushion showed "Viewed" first in its category.
+  - "Show more" reached 500 unique products ("Showing 500 of 3,627 products
+    (the top 500 for this visit)").
+  - Unknown product showed "Product not found".
+  - The footer notice was visible.
+  - Reset gave a new visit ID and "Popular now".
+  - At 375 px, no horizontal scroll.
+  - No server errors; the only browser errors were the deliberate 404s.
+- The log written during that visit had 37 events, one visit ID and
+  whitelisted fields only. Both clicks' positions matched the list shown, and
+  personalised home lists were labelled `six_four_sasrec_pool100`. This test
+  log was then deleted.
+- Labels were first placed between picture and name, which misaligned rows;
+  they were moved onto the picture's corner.
+
+**Category label on every card (user request, same day).** The demo names
+and pictures carry no similarity information. The type label is a hash of
+the name tokens; on 1,500 random pairs each, the combined distance is 0.48 for
+two "Wireless earbuds" in category 47, the same as earbuds against a charger
+in that category, and 1.00 for earbuds against a toaster (category 780).
+Variety on screen is therefore shown by the category.
+- Each card now shows its category name, from `categories.json`, in the
+  picture's top-left corner. "Something different" and "Viewed" moved to the
+  bottom-left. Corners use an 8 px radius so two-line names, such as "Home
+  furnishings collection 807" at 375 px, look tidy.
+- Checked in the browser:
+  - kettle → cushion visit: places 1–7 show "Home furnishings"; places 8–10
+    show "Home furnishings collection 781", "…807" and "Clothing collection
+    350";
+  - every card on the home page, a category page and a related list has a
+    category label;
+  - the related list for jacket 35311 shows one "Home furnishings collection
+    137" among nine "Clothing";
+  - no horizontal scroll at 375 px; `node --check` passes.
+
+**Repeated clicks do not move the home page (user report, 2026-11-10).** In
+the user's visit `02c0185f…` from the click log, the clicks were:
+- 3 Clothing (79141, 33475, 11411): home showed 10 × Clothing;
+- 4 Kitchen appliances: home switched to Kitchen;
+- the same three Clothing products again (79141, 11411, 33475, at places 1–3
+  of Clothing because the ranker moves viewed products up, §6m): home stayed
+  on Kitchen.
+
+Cause: `serving.distinct_in_order` keeps each product at its **first** click,
+as the training and evaluation sequences do (`home_page.click_sequences` uses
+`timeframe.min()`). SASRec therefore saw [79141, 33475, 11411, 51096, 58739,
+32971] (clothing, then kitchen). Ordered by **last** click, [51096, 58739,
+32971, 79141, 11411, 33475], the same visit gives 10 × Clothing. Not a coding
+error but a mismatch between the evaluated input rule and how people use the
+site; the category page's viewed-first behaviour makes re-clicks common.
+No change made yet.
+
+**Test of last-click order (user request; declared before the run).**
+`scripts/analysis/home_repeat_order.py` rebuilds the home-page cases from
+the raw click stream, keeping re-clicks:
+- one case before each product's first click, exactly as
+  `evaluation_cases` does, and the same 20,000 sampled cases;
+- the targets are the products first clicked later.
+
+It feeds SASRec either:
+- (A) the current input: products in order of first click (must reproduce
+  the saved run); or
+- (B) products in order of last click.
+
+This is scored for plain SASRec, 6 + 4 over the top 20 (tested) and 6 + 4
+over the top 100 (website), on all cases and on the cases where A and B
+differ.
+
+Rule: the website switches to last-click order if, for the website policy
+(pool 100) on the cases where the order differs, the 95% interval of the
+NDCG@10 difference (B − A) does not lie entirely below zero, on the
+validation week and again on the selection week. The final test is not used.
+
+Results (`results/home_repeat_order/20261109T161500Z_validation`,
+`…/20261109T162400Z_selection`). The rebuilt cases match `click_sequences`,
+and order A reproduces the saved runs exactly. Re-clicks change the order in
+10.6% (validation) and 11.6% (selection) of the 20,000 cases.
+
+| Week | Policy | Cases where the order differs | NDCG@10, first → last order | Difference [95% CI] | Hit rate difference [95% CI] |
+|---|---|---|---|---|---|
+| Validation | SASRec | 2,121 | 0.1452 → 0.1516 | +0.0064 [+0.0008, +0.0122] | +0.021 [+0.010, +0.034] |
+| Validation | 6 + 4, top 20 (tested) | 2,121 | 0.1395 → 0.1457 | +0.0062 [+0.0010, +0.0122] | +0.020 [+0.008, +0.034] |
+| Validation | **6 + 4, top 100 (website)** | 2,121 | 0.1280 → 0.1341 | **+0.0061 [+0.0010, +0.0114]** | +0.017 [+0.005, +0.029] |
+| Selection | SASRec | 2,323 | 0.1059 → 0.1105 | +0.0047 [−0.0004, +0.0094] | +0.015 [+0.002, +0.028] |
+| Selection | 6 + 4, top 20 (tested) | 2,323 | 0.1019 → 0.1063 | +0.0045 [−0.0002, +0.0088] | +0.016 [+0.004, +0.028] |
+| Selection | **6 + 4, top 100 (website)** | 2,323 | 0.0946 → 0.0992 | **+0.0047 [−0.0003, +0.0094]** | +0.012 [+0.000, +0.024] |
+
+Over all 20,000 cases the change is about +0.0005 to +0.0007 NDCG (only the
+re-click cases move). MRR on the reordered cases improves in both weeks with
+intervals above zero (validation +0.008; selection +0.009). **The rule passes
+on both weeks**, and last-click order is better, not just harmless: a
+re-clicked product signals the shopper's current interest.
+
+**Website fix.**
+- `serving.distinct_by_last_click` and `Recommender(..., click_order="last")`;
+  the default stays `"first"`, as trained and tested, so the export, its
+  verification and the final-test numbers are unchanged.
+- `run_demo.py --click-order last`; home lists are labelled `…_last`, and
+  `/demo/status` reports the order.
+- Test `test_click_order_last_moves_reclicked_products_to_the_end`.
+- Demo + serving tests 23 passed; full suite 238 passed plus the 2 known
+  failures.
+- The user's visit `02c0185f…`, replayed in Python and in the browser (9
+  clicks: 3 Clothing, 3 Kitchen, the same 3 Clothing again), now ends with
+  10 × Clothing (9 "Clothing", 1 "Clothing collection 138") instead of
+  Kitchen. The logged home lists read `six_four_sasrec_pool100_last`.
+- The demo now runs with `--home-pool 100 --click-order last --log`.
+- For the report: first-click order (the input rule inherited from the
+  dataset's evaluation) undervalues returning interests; the improvement was
+  measured on the validation and selection weeks only, as a website change
+  after the final test.
+
+---
+
+## 6s. Fact check of the latest poster (2026-11-10)
+
+User request. File checked: `Clew_Demo_Results_A1` (pptx/pdf/png,
+2026-11-10 00:42, made by `create_clew_demo_results_poster.py` with another
+tool, in `Documents\Codex\CP4285_STEPS_2026`).
+
+**Verified correct against the result files and this log.**
+- Format: 594 × 841 mm. The QR code decodes to
+  `https://uvents.nus.edu.sg/event/29th-steps/vote`.
+- Data facts: median 1 click per April training session, 95% category
+  browses, 57% of clicks below place 50 (§2).
+- Evaluation weeks, including "SASRec trained February–April".
+- The three paths: LightGBM top 10; SASRec top 20 → 6 + 4; item-kNN top 20 →
+  80/20. Popularity fallback; purchase features and graded labels.
+- Final test, against `results/confirmation/20261108T193024Z_confirmation/final_table.csv`:
+  - category 0.167 → 0.184, +0.018 [0.005, 0.032], 939 queries;
+  - session 0.098 → 0.111, +0.014 [0.010, 0.017];
+  - related products 0.093 → 0.095, +0.003 [−0.001, 0.006], "no clear
+    ranking gain".
+  - Bar heights are proportional.
+- Selection-week variety:
+  - SASRec → 6 + 4: ILD 0.517 → 0.560 (+8.2%), NDCG 0.122 → 0.118 (−3.3%);
+  - item-kNN → 0.8: ILD 0.620 → 0.652 (+5.2%), NDCG 0.101 → 0.097 (−3.3%).
+- Demo box, against §6p and §6r:
+  - pool 20 → 100: new category 32% → 79%, later click in the last four
+    12.2% → 7.5%, NDCG 0.118 → 0.110;
+  - last-click order: 2,323 cases, 0.0946 → 0.0992, "inconclusive on
+    selection".
+- "Views: no measurable ranking gain" (§6) and "Adaptive variety: did not
+  beat a tuned fixed balance" (§3) are correct.
+- The final test is described neutrally; no other use of those dates is
+  mentioned.
+
+**To correct or decide.**
+1. "Supervisor: Kan Min Yen" was added back; hct's poster spec asked for
+   the supervisor to be removed. Usual spelling: Kan Min-Yen.
+2. "Candidate filters: Two-tower ≈ popularity" overstates the two-tower. §4
+   says it "remains slightly below plain popularity" (top-10 NDCG 0.172 vs
+   0.201 on the logged list; 0.135 vs 0.164 on the whole category).
+   Suggested: "Two-tower below popularity".
+3. The demo box does not say that pool 100 was chosen after the final test
+   and failed its pre-set check (4.8% < 7% discovery clicks, §6p).
+   Suggested: "website setting, chosen after the final test".
+4. The demo box reports last-click order only as "inconclusive on
+   selection"; it was also positive on validation (+0.006 [+0.001, +0.011])
+   and passed its rule on both weeks.
+5. No references (the earlier poster cited SASRec, LightGBM and the
+   Diginetica data) — check whether the course requires them.
+6. Author order differs from the UVENTS page (Ho Chi Thanh first there).
+
+**User decision: fix 3, remove 4; 1, 2, 5 and 6 left as they are.**
+- In `create_clew_demo_results_poster.py`, the demo box's two repeat-click
+  lines ("Most recent click order · 2,323 changed cases · NDCG 0.0946 →
+  0.0992" and "…inconclusive on selection") were replaced by "Website
+  setting, chosen after the final test." and "The final-test results below
+  use the tested pool of 20."
+- The now unused reading of `home_repeat_order` and its speaker-note
+  sentences were removed, and the notes now state that the demo box is a
+  post-final-test website setting.
+- Rebuilt with the Codex runtime Python, which has `reportlab` and
+  `pypdfium2`. The first rebuild said "results above"; it was corrected to
+  "below" and rebuilt.
+- Checked: 594 × 841 mm, 397 words, the new lines present, no repeat-click
+  text left, the rest unchanged.
+- Earlier files were kept in `previous_versions/…_before_fix_2026-11-10.*`.
+
+**Committed 2026-11-10** on `refactor/readable-main-pipeline` and pushed
+(user request). The commit contains:
+- the work of §6p–§6s: the home-page analysis scripts, the website options
+  (`--home-pool`, `--click-order`, `--log`), the full display catalog, the
+  website fixes and the tests;
+- this log.
+
+Not committed:
+- `figures/clew_showcase.gif` (origin unknown);
+- `logs/` (visitor clicks; git-ignored);
+- `results/` (git-ignored);
+- the STePS and poster files, which live outside the repository.
+
+---
+
 ## 7. Decisions
 
 | Date | Decision | Evidence |

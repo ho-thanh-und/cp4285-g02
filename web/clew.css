@@ -30,7 +30,19 @@ h2 { font-size: 25px; margin: 0 0 20px; }
 .detail .product-image { max-width: 620px; }
 .detail-price { font-size: 22px; }
 #view button { margin-top: 24px; }
+#view button:disabled { cursor: progress; opacity: 0.6; }
+.caption { color: #5d655f; margin: -8px 0 20px; }
+.grid + .caption { margin: 20px 0 0; }
+.media { position: relative; display: block; }
+.tags { position: absolute; left: 8px; right: 8px; display: flex; flex-wrap: wrap; gap: 6px; pointer-events: none; }
+.tags.top { top: 8px; }
+.tags.bottom { bottom: 8px; }
+.tag { font-size: 12px; line-height: 1.4; padding: 2px 8px; border-radius: 8px; box-shadow: 0 0 0 1px rgb(255 255 255 / 0.7); }
+.tag.category { background: rgb(255 255 255 / 0.92); color: #202824; border: 1px solid #d9d4cc; box-shadow: none; }
+.tag.discovery { background: #e1f0ec; color: #00574d; }
+.tag.viewed { background: #ece9e3; color: #4a514c; }
 footer { max-width: 1400px; margin: auto; padding: 24px 4%; color: #5d655f; font-size: 14px; }
+footer p { margin: 0 0 6px; }
 @media (max-width: 700px) {
   header { padding: 16px 4%; }
   .category-grid, .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px 12px; }
