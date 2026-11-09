@@ -146,6 +146,11 @@ measured in §2. In the website we would counter it in three ways:
   - a visible notice that interactions are recorded for a course project,
     with the option to browse without logging;
   - deletion of the logs after grading.
+
+  The recommendation API built for the website (`HANDOFF.md`) already enforces
+  the second and third points: its `/log` call keeps only whitelisted fields,
+  stores the date but not the time of day, and the server records no IP
+  addresses or request lines. The other points are the website's to implement.
 - **Inference risk.** Even an anonymous session reveals interests. Session
   data is used only within that session and is not joined across visits.
 

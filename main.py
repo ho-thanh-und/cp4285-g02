@@ -187,6 +187,9 @@ def cli(argv=None):
     recommendations over the whole catalog on one allowed week.
     `uv run main.py error-analysis` breaks down where the frozen models win and lose
     on the selection results (config/error_analysis.json).
+    `uv run main.py serve --handoff results/handoff/STAMP` starts the website's JSON API.
+    `uv run main.py handoff` exports the frozen models for the website and checks
+    that they reproduce the final test (config/handoff.json, HANDOFF.md).
     `uv run main.py confirmation` runs the final test once: every page's frozen
     choice on the confirmation week (config/confirmation.json).
     `uv run main.py exposure` measures exposure and popularity bias of the frozen
@@ -206,7 +209,7 @@ def cli(argv=None):
     expanded study settings. --help performs no preparation.
     """
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", nargs="?", choices=["prepare", "train", "pilot-train", "diversity", "run", "resume", "expand", "expand-resume", "compare", "alpha-sweep", "two-tower", "filter-pipeline", "event-ablation", "ranker-phase2", "prepare-data", "item-knn", "heldout", "ymal", "home-page", "error-analysis", "exposure", "confirmation", "sequence-models", "export-sequences", "score-external"], default="prepare",
+    parser.add_argument("action", nargs="?", choices=["prepare", "train", "pilot-train", "diversity", "run", "resume", "expand", "expand-resume", "compare", "alpha-sweep", "two-tower", "filter-pipeline", "event-ablation", "ranker-phase2", "prepare-data", "item-knn", "heldout", "ymal", "home-page", "error-analysis", "exposure", "confirmation", "handoff", "serve", "sequence-models", "export-sequences", "score-external"], default="prepare",
                         help="Prepare, train, review diversity, run remaining stages, or resume a study")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG,
                         help="Sample sizes, date periods, and history limit")
@@ -244,6 +247,10 @@ def cli(argv=None):
                         help="Session two-tower, week and policies for the home page evaluation")
     parser.add_argument("--errors-config", type=Path, default=Path("config/error_analysis.json"),
                         help="Selection results to analyse for error-analysis")
+    parser.add_argument("--handoff", type=Path, help="Exported hand-off folder for serve")
+    parser.add_argument("--port", type=int, default=8000, help="Port for serve")
+    parser.add_argument("--handoff-config", type=Path, default=Path("config/handoff.json"),
+                        help="Frozen runs to export for the website")
     parser.add_argument("--confirmation-config", type=Path, default=Path("config/confirmation.json"),
                         help="Page configs for the final confirmation test")
     parser.add_argument("--exposure-config", type=Path, default=Path("config/exposure.json"),
@@ -281,6 +288,17 @@ def cli(argv=None):
         os.chdir(Path(__file__).resolve().parent)
         from session_rerank.error_analysis import run_error_analysis
         run_error_analysis(args.errors_config)
+        return
+    if args.action == "serve":
+        if args.handoff is None:
+            parser.error("serve needs --handoff results/handoff/<folder>")
+        from session_rerank.api import serve
+        serve(args.handoff, args.port)
+        return
+    if args.action == "handoff":
+        os.chdir(Path(__file__).resolve().parent)
+        from session_rerank.handoff import run_handoff
+        run_handoff(args.handoff_config)
         return
     if args.action == "confirmation":
         os.chdir(Path(__file__).resolve().parent)

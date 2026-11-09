@@ -72,6 +72,10 @@ which is why this did not show up before.
 | `scripts/t4rec/` (`train_t4rec.py`, `requirements-t4rec.txt`, `t4rec.slurm`, `T4REC_GUIDE.md`) | Transformers4Rec in its own environment | `config/t4rec.json` | helpers in `tests/test_external_models.py` |
 | `scripts/cluster/` (`make_sequence_grid.py`, `check_inputs.py`, `collect_sequence_grid.py`, `sequence_grid.slurm`, `sequence_grid.pbs`, `CLUSTER_GUIDE.md`) | cluster job array | generated `config/sequence_grid/` | `tests/test_cluster_scripts.py` |
 | `home_page.py` | `home-page` | `config/home_page.json` (validation week), `config/home_page_selection.json` (frozen policy and model, selection week) | `tests/test_home_page.py` |
+| `exposure.py` | `exposure` | `config/exposure.json` | `tests/test_exposure.py` |
+| `windows.py`, `confirmation.py` | `confirmation` | `config/confirmation.json` + four `*_confirmation.json` page configs | `tests/test_confirmation.py` |
+| `handoff.py`, `serving.py`, `api.py` | `handoff`, `serve` | `config/handoff.json` | `tests/test_serving.py` |
+| `scripts/report/` (`make_figures.py`, `audit_report.py`) | report figures and number audit | result folders named in each script | the audit itself |
 
 **Analysis scripts** moved into the repository: `scripts/analysis/session_lengths.py`
 and `scripts/analysis/click_view.py`. Other dataset facts below were measured
@@ -606,12 +610,12 @@ used for any choice before this run.
 | Popularity sort | 0.174 | 0.283 | 0.161 | 0.160 | 0.183 |
 | Item-kNN (co-click CF) | 0.176 | 0.291 | 0.159 | 0.163 | 0.183 |
 | LightGBM `click_session` | 0.203 | 0.322 | **0.186** | 0.223 | **0.192** |
-| **LightGBM `purchase_session`** (chosen) | **0.204** | **0.326** | 0.185 | **0.229** | 0.189 |
+| **LightGBM `purchase_session`** (chosen) | **0.203** | **0.326** | 0.185 | **0.229** | 0.189 |
 
 Differences (session bootstrap, 95% intervals):
 
-- **LightGBM vs popularity sort:** `purchase_session` NDCG +0.029 (+0.017,
-  +0.043), recall +0.043 (+0.025, +0.062), MRR +0.024 (+0.011, +0.037). With
+- **LightGBM vs popularity sort:** `purchase_session` NDCG +0.029 (+0.016,
+  +0.042), recall +0.043 (+0.025, +0.062), MRR +0.024 (+0.011, +0.037). With
   history NDCG +0.069 (+0.040, +0.101). `click_session` is the same within
   0.005.
 - **LightGBM vs item-kNN:** NDCG +0.028 (+0.014, +0.041), recall +0.035
@@ -682,7 +686,7 @@ the diversity policies.)
   |---|---:|---:|---:|---:|---:|---:|---:|
   | Fixed 0.8, K1 = 20 | −0.008 | −0.010 | −0.003 | −0.004 (−4.0%) | +0.033 | +0.056 | +0.028 |
   | Fixed 0.8, K1 = 50 | −0.009 | −0.012 | −0.004 | −0.005 (−5.0%) | +0.042 | +0.073 | +0.038 |
-  | 6 + 4, K1 = 20 | −0.014 | −0.022 | −0.002 | −0.006 (−5.9%) | +0.068 | +0.116 | +0.086 |
+  | 6 + 4, K1 = 20 | −0.014 | −0.022 | −0.002 | −0.006 (−5.8%) | +0.068 | +0.116 | +0.086 |
   | 6 + 4, K1 = 50 | −0.020 | −0.032 | −0.004 | −0.009 (−8.3%) | +0.110 | +0.197 | +0.147 |
 
 - **6 + 4 keeps the top of the list:** MRR drops by only 0.002–0.004 because
@@ -698,7 +702,7 @@ the diversity policies.)
   cost of diversity is therefore likely overstated offline.
 
 **Decision rule check.** The plan's rule (§8, Phase 4: most ILD within 5% NDCG
-loss) admits fixed alpha 0.8 with K1 = 20 (−4.0%) and rejects 6 + 4 (−5.9% and
+loss) admits fixed alpha 0.8 with K1 = 20 (−4.0%) and rejects 6 + 4 (−5.8% and
 −8.3%); the product brief asked for 6 + 4 on this page.
 
 **Decision (user, 2026-11-08): fixed alpha 0.8 with K1 = 20**, following the
@@ -734,7 +738,7 @@ same pages for comparison.
   to −0.0029), recall −0.006, MRR −0.003; ILD +0.033 (+0.032, +0.033), category
   ILD +0.056, tail-to-head +0.029. Inside the 5% rule, as on validation (−4.0%).
 - **Frozen policy vs category popularity (the cold baseline):** NDCG +0.007
-  (+0.003, +0.011), MRR +0.013 (+0.008, +0.019); recall and hit rate level
+  (+0.003, +0.010), MRR +0.013 (+0.008, +0.019); recall and hit rate level
   (intervals around zero); ILD +0.194 and 2.8 categories instead of 1.0.
 - **Item-kNN relevance vs category popularity** again beats it on every
   relevance metric (NDCG +0.010, +0.006 to +0.014).
@@ -1200,7 +1204,7 @@ cluster run (0.1379).
 | Method | Recall@10 | MRR@10 | NDCG@10 | NDCG vs SASRec | Combined ILD | Category ILD | Categories in 10 | Outside last click's category |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | SASRec (relevance only) | 0.185 | 0.169 | 0.1379 | – | 0.513 | 0.106 | 1.54 | 10.0% |
-| SASRec + fixed 0.8 | 0.183 | 0.169 | 0.1366 | −0.9% | 0.525 | 0.126 | 1.66 | 11.1% |
+| SASRec + fixed 0.8 | 0.183 | 0.169 | 0.1366 | −1.0% | 0.525 | 0.126 | 1.66 | 11.1% |
 | **SASRec + 6 + 4** | 0.173 | 0.168 | **0.1329** | **−3.6%** | **0.554** | 0.168 | 1.92 | 13.2% |
 | item-kNN + fixed 0.8 (frozen) | 0.151 | 0.147 | 0.1173 | −15.0% | 0.667 | 0.388 | 2.95 | 34.6% |
 
@@ -1413,7 +1417,7 @@ folder with the same frozen choices, and the fixed code was recorded as
 | Item page | item-kNN + fixed 0.8, K1 = 20 | **0.095** | category popularity 0.093 | +0.003 (−0.001, +0.006): **tie** | MRR +0.008 (+0.003, +0.013); recall −0.002 (−0.006, +0.003); ILD **+0.176** |
 | | | | item-kNN relevance only 0.099 | −0.003 (−3.3%) | ILD +0.032 |
 | Home page | SASRec + 6 + 4 | **0.111** | item-kNN + fixed 0.8 0.098 | **+0.014 (+0.010, +0.017)**, +14% | Recall +0.020; MRR +0.017; ILD −0.109 |
-| | | | item-kNN 0.101 | +0.011 (+0.007, +0.014) | |
+| | | | item-kNN 0.101 | +0.010 (+0.007, +0.014) | |
 | | | | two-tower 0.090 | +0.021 (+0.017, +0.025) | popularity 0.003 |
 
 **Reading.**
@@ -1438,7 +1442,7 @@ folder with the same frozen choices, and the fixed code was recorded as
   | Week | NDCG lead (95% CI) |
   |---|---|
   | validation | +0.005 (+0.001, +0.010) |
-  | selection | +0.007 (+0.003, +0.011) |
+  | selection | +0.007 (+0.003, +0.010) |
   | confirmation | +0.003 (−0.001, +0.006) |
 
   On confirmation that lead is no longer distinguishable from zero. It still
@@ -1453,6 +1457,301 @@ folder with the same frozen choices, and the fixed code was recorded as
   weeks after the April data that every model learned from. Gains that depend
   on specific co-clicks (item-kNN) or popularity snapshots may fade with time.
 
+## 6m. Final report, audit and website hand-off (2026-11-09)
+
+The user asked for both remaining pieces overnight: the written report and the
+website hand-off, with continuous auditing.
+
+**Report (`REPORT.md`).** The structure follows common course-report guidance
+(problem statement and task definition first; data; methods with baselines;
+evaluation protocol; results; error analysis; ethics; limitations) and offline
+recommender-evaluation best practice:
+- the task is defined before the evaluation;
+- baselines are strong and compared on identical cases;
+- the split type is stated;
+- held-out results are reported with paired intervals.
+
+Figures come from `scripts/report/make_figures.py`, which reads the saved runs
+directly (`figures/fig1_sequence_grid.png`, `fig2_trade_off.png`,
+`fig3_final_test.png`, `fig4_exposure.png`). The figure for the grid is a dot
+plot rather than bars, because its axis does not start at zero.
+
+**Audit (`scripts/report/audit_report.py`).** It recomputes every checked
+number from the result files and raw data and looks for that exact text in
+the report. The checks cover:
+- the three-week table and the final-test table;
+- the variety-rule table;
+- the error-analysis tables and exposure numbers;
+- dataset counts, the abstract and the conclusion.
+
+Final state: **78 of 78 checks pass**. The `ETHICS.md` exposure table was
+checked the same way (14 of 14 rows match).
+
+The audit found these errors in the first draft. They are corrected in the
+report, and the same slips are corrected in this log (§6d, §6f, §6j, §6l):
+
+| Item | Was | Correct (from the result files) |
+|---|---|---|
+| LightGBM NDCG on selection | 0.204 | 0.203 (0.20346) |
+| LightGBM vs popularity on selection | +0.029 (+0.017, +0.043) | +0.029 (+0.016, +0.042) |
+| Item page vs category popularity on selection | upper bound +0.011 | +0.010 |
+| Home page vs item-kNN on confirmation | +0.011 | +0.010 |
+| Home page vs two-tower, MRR lower bound on confirmation | +0.026 | +0.025 |
+| SASRec + fixed 0.8 vs SASRec on validation | −0.9% | −1.0% |
+| Item page 6 + 4 (K1 = 20) vs relevance on validation | −5.9% | −5.8% (exactly −5.85%, on the rounding edge) |
+| Adaptive-policy gap range | −0.005 to +0.003 | −0.004 to +0.003 (shuffled controls excluded) |
+| SASRec training data | 94,406 sessions, 291,928 examples (data count) | 94,405 sessions, 285,562 examples (the model's own record: last 20 clicks) |
+| Daily sessions | 592,643 (all event files) | 591,018 with at least one query (the report's definition) |
+| Sessions that buy | 2.2% | about 2% of sessions with a query |
+| Category gain in the conclusion | about 10% | 11% |
+
+A read-through also removed wording the numbers did not support:
+- "SASRec + 6 + 4 beats every other method": SASRec without the diversity step
+  scores higher, 0.115.
+- "14% over the best classical method": the 14% is over the method it
+  replaced; against plain item-kNN the gain is 10%.
+- An untested explanation of why 6 + 4 costs less on the home page.
+- "SASRec covers cold products": replaced by the measured 5.6% of slots on
+  products without April clicks.
+
+**Website hand-off (`HANDOFF.md`).**
+- `uv run main.py handoff` (`handoff.py`, `config/handoff.json`) exports every
+  frozen model to `results/handoff/<stamp>/`:
+  - SASRec with its settings, vocabulary and fallbacks;
+  - the LightGBM booster with its frozen product inputs;
+  - "You may also like" for all 184,047 products.
+- It then verifies the export against the confirmation-week runs:
+  - home page: identical lists;
+  - item page: identical NDCG for every page;
+  - category pages: identical NDCG for every query.
+- `serving.py` serves the three pages with the evaluation's own functions.
+  The category ranker computes its 20 features live with `query_features`, the
+  same function used in training. It does not use the site's list order, so
+  the website can rank whole categories.
+- `api.py` (`uv run main.py serve --handoff …`) is a standard-library JSON API
+  with a `/log` call that keeps only whitelisted fields and records no IP
+  addresses (`ETHICS.md` §5).
+- Tests: `tests/test_serving.py` (8 tests: home cold start and SASRec + 6 + 4,
+  fallback, item lookup, category features against `query_features`, log
+  whitelist, end-to-end API, CLI). Full suite: 223 passed, plus the 2 known
+  failures.
+
+**Export and verification (`results/handoff/20261108T203934Z`, 27 MB).**
+- Passed all three checks against `results/confirmation/20261108T193024Z_confirmation`:
+  - home page: every 10th of the 20,000 cases, 2,000 of 2,000 served lists
+    identical to the saved SASRec + 6 + 4 lists;
+  - item page: 20,000 of 20,000 pages with identical NDCG (mean 0.0954);
+  - category pages: 952 of 952 category queries with identical NDCG (mean
+    0.1843, the final-test value).
+- The item-page export took about 20 minutes (184,047 products); the
+  verification took about a minute.
+
+A live run of the API on this export (scratch script, not committed):
+- loading takes about 6 s;
+- each call takes 3–35 ms, including the largest category (3,851 products);
+- `/log` dropped a non-whitelisted field.
+
+**Behaviour to know.** On a category page, a product the shopper already
+clicked moves to the top (e.g. product 9654 in category 1010 after one click):
+the frozen ranker learned that shoppers often click a product again
+(`session_item_clicks`). This is part of what was evaluated. `HANDOFF.md` tells
+the website team they may keep it or drop already-clicked products from the
+display.
+
+**Committed 2026-11-09** on `refactor/readable-main-pipeline` and pushed to
+`origin` (user request): the report, figures, audit and figure scripts, the
+hand-off/serving/API code with its tests, and the edits to `ETHICS.md`,
+`README.md`, `main.py` and this log. Left out: `figures/clew_showcase.gif`
+(4.4 MB, not made in this log's work and not referenced anywhere). The STePS
+page and poster files (§6n, §6o) live outside the repo and are not committed.
+
+---
+
+## 6n. STePS project page copy (2026-11-09)
+
+The organisers require a title, description and image on the project's UVENTS page
+by 9 Nov, 11:00 am. The page is
+https://uvents.nus.edu.sg/event/29th-steps/module/CP4285/project/2 (project ID
+**CP4285-2**, listed as T02; members Ho Chi Thanh, Nguyen Dinh Nam,
+R Arulkumaran). Another team's page in the module shows the available fields:
+- a short abstract, shown on the module list and over the banner;
+- a long description;
+- a 16:9 project image, stored by UVENTS at 960 × 540;
+- a poster link to a direct imgur image.
+
+Written for non-technical visitors, outside this repository in
+`C:\Users\namnd\Documents\Codex\CP4285_STEPS_2026\`:
+- `UVENTS_Page_Copy.md`: the title (Room to Discover: Recommending to
+  Strangers), the abstract, the description and a fact sheet tracing every
+  number to `REPORT.md` or the final-test `final_table.csv`. The page uses
+  final-test numbers, not the selection-week numbers in the older drafts in that
+  folder:
+  - category pages +11% (NDCG 0.184 vs 0.167);
+  - home page +14% (0.111 vs 0.098);
+  - one in three home lists hit a later click (hit rate 0.334);
+  - "You may also like": same NDCG as category popularity, 2.6 vs 1.0 categories.
+- `UVENTS_Project_Image.jpg`: a 1920 × 1080 banner, about 180 KB. It is drawn from
+  `uvents_banner.html` by `render_uvents_banner.cjs` (Playwright), which also writes a
+  preview at the size the page shows it.
+
+Nothing was submitted. The team uploads the image to imgur and pastes the text
+into UVENTS.
+
+**Revision (same day).** The team's own draft provided:
+- the title **Clew: Session-Based Product Discovery for Anonymous Shoppers**;
+- the dataset facts;
+- the three-stage pipeline: candidate selection, relevance ranking, diversity
+  reranking.
+
+The copy was rewritten on that structure. It keeps the story ("Why Clew?": the
+ball of thread behind the word "clue"), the final-test results, the finding that
+adaptive variety did not win, and the exposure and privacy notes. The banner now
+reads "Clew – Every click is a clue." Two claims were corrected:
+- Candidate selection with the two-tower model is described as tried, not used,
+  because the final system shortlists from the item-kNN and SASRec top 20.
+- "2.6× more categories" became "2.6× as many categories", since the result is
+  2.6 categories against 1.0.
+
+**Figures and full page (same day).** `UVENTS_Page.md` lays out the whole UVENTS
+page: title, abstract, banner, then the description with five figures placed in
+it, under `uvents_images/` at 1600 × 900. The figures are drawn from
+`uvents_figures.html` by `render_uvents_figures.cjs`.
+
+| Figure | Shows | Source |
+|---|---|---|
+| `1_buried_clicks` | Median clicked position 65–67; 57% of clicks below place 50 | REPORT §1.1 |
+| `2_three_questions` | The three-stage pipeline | REPORT §3 |
+| `3_three_pages` | Three pages and their models | REPORT §3.6 |
+| `4_results` | Final-test bars: category 0.167 vs 0.184; home 0.098 vs 0.111; item page 1.0 vs 2.6 categories | final_table.csv, REPORT §5.4 |
+| `5_who_gets_seen` | A grid of 2% / 23% / 75% of products by share of April clicks; category-page head share 25%, 40%, 68%, 72% | ETHICS.md §2, selection week |
+
+`UVENTS_Page_preview.png` is a full-page render of the Markdown file, used to
+check the layout.
+
+**Shorter, story-led version (same day, user feedback).** The user wanted:
+- no "Why Clew" mythology section;
+- an opening question as the hook;
+- less technical depth;
+- the flow of the HTML project page, with running shoes as the running example.
+
+What changed:
+- `UVENTS_Page.md` now flows: hook question → "A click is a clue" → how Clew
+  works → three pages → does it work → who gets seen → a closing question.
+- It is about 360 words, down from about 650.
+- The "adaptive variety did not win" section and the dataset section were
+  dropped.
+
+Figure changes:
+- Figure 2 is now `2_how_clew_works`: four steps (you click → shortlist → rank →
+  add variety), each with a few words and a small technical tag, and no
+  questions.
+- Figure 1 says "what people clicked", not "shoes", because the data covers all
+  products.
+- Figure 3 has a shorter title and shorter model captions.
+
+`UVENTS_Page_Copy.md` is now only the upload checklist and fact sheet.
+
+**One image only (same day).** UVENTS allows no images inside the description,
+only the single project image. The banner is that image.
+
+Changes to `UVENTS_Page.md`:
+- The description is now text only, about 395 words.
+- It restates in words what the figures carried: 57% of clicks were below
+  place 50; three in four products had no clicks; the category ranker gives
+  about two-thirds of its top places to the popular 2%.
+
+The five figures in `uvents_images/` are kept for the poster, slides or the booth.
+
+**Technical depth added back (same day, user request).** The page keeps the shoe
+story and now also names:
+- session-based recommendation, and the three stages (candidate selection,
+  relevance ranking, diversity reranking);
+- how variety is added: 6 + 4 over the top 20, and 80/20 maximal marginal
+  relevance, with distance by category and name, and the 5% cap declared before
+  testing;
+- the models: LightGBM learning-to-rank (20 signals, purchases weighted above
+  clicks), item-kNN collaborative filtering, the SASRec self-attention
+  transformer, and 12 SASRec and GRU4Rec settings tuned on a GPU cluster;
+- how it was tested: compared against popularity, two-tower and GRU4Rec; chosen
+  on one week, checked on a second, frozen and tested once; NDCG@10 with 95%
+  confidence intervals; the category and home intervals stay above zero.
+
+Length: abstract about 115 words, description about 615. Each new claim was
+checked against REPORT.md §1.3, §3.3–3.5 and §4.2 and added to the fact sheet in
+`UVENTS_Page_Copy.md`.
+
+**Organised by pipeline, not by page (same day, user request).**
+- "How Clew works" now walks through the three stages, with the methods inside
+  each:
+  - candidate selection: the shop's list, popularity, a two-tower model,
+    item-kNN;
+  - relevance ranking: LightGBM learning-to-rank, SASRec;
+  - diversity reranking: 6 + 4, and the 80/20 maximal marginal relevance balance.
+- The "Three pages" section is gone. Results are labelled by technique:
+  - learning-to-rank +11% over popularity;
+  - SASRec + 6 + 4 +14% over the co-click method it replaced;
+  - the 80/20 reranking has the same accuracy as a popularity list, with 2.6
+    categories against 1.
+- The abstract follows the same structure.
+- The banner stat captions now read "learning-to-rank vs. popularity", "SASRec
+  vs. previous method" and "categories per list, same accuracy".
+- The web demo is not mentioned anywhere: the team is not confident in it.
+
+## 6o. A1 poster "Clew" (2026-11-09)
+
+Built from the team's spec (hct): one A1 portrait slide, 594 × 841 mm, white
+background, Arial, teal for ranking results and coral for diversity. Files are
+in `C:\Users\namnd\Documents\Codex\CP4285_STEPS_2026\poster\`:
+- `Clew_A1_Poster.pptx`, `.pdf` and `_preview.png`;
+- `build_clew_poster.py` (python-pptx) builds the slide;
+- `render_poster.ps1` exports PDF and PNG through PowerPoint itself, so the fonts
+  are exact.
+
+Earlier poster files in that folder were left untouched.
+
+**Content.**
+- Header with the opening question, introduction and a vote QR code.
+- Left column: three data statistics from the April training pool (median one
+  click per session; 95% category browses; 90% of lists hold one category), the
+  evaluation timeline and the metric definitions.
+- Right column: three parallel paths (LightGBM; SASRec → top 20 → 6 + 4;
+  item-kNN → top 20 → fixed 0.8), notes on each model, and a box on the earlier
+  experiments.
+- Final test (native bar charts):
+  - category 0.184 vs 0.167, +0.018 [0.005, 0.032], 939 queries;
+  - session 0.111 vs 0.098, +0.014 [0.010, 0.017];
+  - related products 0.095 vs 0.093, +0.003 [−0.001, 0.006], marked "no clear
+    NDCG improvement".
+- Variety on the selection week, as dumbbell plots built from shapes, with
+  separate NDCG and ILD axes:
+  - SASRec 0.1217 → 0.1177 and 0.517 → 0.560;
+  - item-kNN 0.101 → 0.097 and 0.620 → 0.652.
+- Caption, limitations, the six sponsor logos, and "29th STePS · 11 November
+  2026". The supervisor is not named, and there is no AI-assistance line, as the
+  spec asked.
+
+**Checks.**
+- Every number traced to `final_table.csv`, the selection `summary.csv` files and
+  log §2, §3, §5, §6 and §6l. The sources are in the slide's speaker notes.
+- Logos: the six Platinum and Gold logos from the official sponsors page, in
+  their original colours, cropped of padding only, never stretched. The logo
+  says "Tealseed"; the spec wrote "Teals".
+- The QR code, decoded from the rendered PNG, gives
+  `https://uvents.nus.edu.sg/event/29th-steps/vote`. That page opens the CP4285
+  ballot.
+- PDF and slide are 594.0 × 841.0 mm.
+- Native elements: three charts and editable text boxes; pictures only for the
+  logos and the QR code.
+- About 484 words excluding citations.
+- Smallest text: 18 pt on chart labels and 16 pt on citations.
+- PowerPoint opened and exported the file without a repair prompt. The skill's
+  `validate.py` could not load its schema files on this machine, so it gave no
+  verdict.
+
+**Not verified.** The Canva import. The "twenty design patterns" image mentioned
+in the spec was not supplied; the skill's own list of patterns to avoid was used
+instead (no accent bars or edge stripes, no decorative rules).
+
 ---
 
 ## 7. Decisions
@@ -1463,7 +1762,7 @@ folder with the same frozen choices, and the fixed code was recorded as
 | 2026-11-09 | **Home page switches to SASRec + 6 + 4** after the first click (popularity before it), replacing item-kNN + fixed 0.8 (user decision, frozen before the selection week is opened). Model: SASRec dim 64, 2 blocks, dropout 0.5, trained on February–April, epoch 9 (`results/sequence_models/20261108T175008Z_validation/sasrec.pt`); 6 + 4 over its top 20 products. | §6j: best of a 12-setting grid; the declared rule (most ILD within 5% NDCG loss) picks 6 + 4 (−3.6% NDCG, +0.041 ILD); +0.016 NDCG over item-kNN + fixed 0.8 (interval above zero) but less diverse (ILD 0.554 vs 0.667). Matches the brief's 6 + 4. |
 | 2026-11-08 | **Home page stays on item-kNN + fixed alpha 0.8 for now**, although SASRec is more accurate on validation (user decision). SASRec to be retested with more training data. | §6j: SASRec NDCG +0.008 over item-kNN but ILD 0.555 vs 0.667 for the frozen policy; one untuned setting. |
 | 2026-11-08 | **Home page uses item-kNN on the session's clicks with fixed alpha 0.8 over a 20-product pool** after the first click, popularity before it (user decision, replaces the brief's two-tower); frozen before the selection week is opened. | §6g: item-kNN beats the session two-tower (NDCG +0.021, interval above zero) and is far more diverse; fixed 0.8 costs −3.0% NDCG for +0.039 ILD. |
-| 2026-11-08 | **"You may also like" uses item-kNN with fixed alpha 0.8 over a 20-product pool** (user decision, replaces the brief's 6 + 4 for this page); frozen before the selection week is opened. | §6e: within the declared 5% NDCG rule (−4.0%), +0.033 ILD; 6 + 4 gave twice the diversity at −5.9%. Speed is equal. |
+| 2026-11-08 | **"You may also like" uses item-kNN with fixed alpha 0.8 over a 20-product pool** (user decision, replaces the brief's 6 + 4 for this page); frozen before the selection week is opened. | §6e: within the declared 5% NDCG rule (−4.0%), +0.033 ILD; 6 + 4 gave twice the diversity at −5.8%. Speed is equal. |
 | 2026-11-08 | **Category-page choices frozen; `purchase_session` (popularity + xendcg, 50k) is the category-page ranker.** | §6d: frozen before the selection split was read; selection confirms LightGBM over both baselines; the declared rule picks `purchase_session` by 0.0001 NDCG (a practical tie). |
 | 2026-11-08 | **Item-kNN on session co-clicks is the classical CF baseline** (and the planned "You may also like" model); MRR@10 is reported with NDCG@10 and Recall@10. | §6c: LightGBM beats item-kNN by +0.025 NDCG (interval above zero); item-kNN beats popularity only in direction. |
 | 2026-11-08 | **Train the category-page ranker on 50,000 queries** (data folder `results/learning_curve_v2/queries_50000`); keep `popularity_xendcg` as the lead. Position correction is dropped. | §6b: 50k adds +0.008 to +0.021 over 10k; at 50k all variants beat the popularity sort by about +0.03 and differ from each other by less than 0.01. All-data training does not fit in the free memory yet. |
@@ -1580,6 +1879,10 @@ uv run main.py home-page --home-config config/home_page_selection.json
 uv run main.py error-analysis
 uv run main.py exposure
 uv run main.py confirmation
+uv run main.py handoff
+uv run main.py serve --handoff results/handoff/STAMP --port 8000
+uv run python scripts/report/make_figures.py
+uv run python scripts/report/audit_report.py
 uv run main.py sequence-models
 uv run python scripts/analysis/session_lengths.py data/raw OUTPUT_FOLDER
 uv run python scripts/analysis/click_view.py data/raw

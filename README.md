@@ -1,5 +1,18 @@
 # Session-Aware Product Re-ranking
 
+**Start here (final state, 2026-11-09):**
+
+- [REPORT.md](REPORT.md): the project report (problem, data, methods,
+  evaluation, final-test results, error analysis, ethics).
+- [ETHICS.md](ETHICS.md): the full ethical analysis with exposure measurements.
+- [HANDOFF.md](HANDOFF.md): running the frozen models behind the demo website
+  (`uv run main.py handoff`, then `uv run main.py serve`).
+- [EXPERIMENT_LOG.md](EXPERIMENT_LOG.md): every experiment, decision and code
+  change since 7 November 2026.
+
+The sections below describe the earlier pilot workflow and are kept for
+reproducibility.
+
 The agreed expansion, purchase-aware training, decay experiments, and final-report
 requirements are recorded in [TRAINING_PLAN.md](TRAINING_PLAN.md). Read that plan
 before continuing implementation or drafting conclusions. The commands below

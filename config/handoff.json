@@ -1,0 +1,13 @@
+{
+  "output_directory": "results/handoff",
+  "trained_run": "results/learning_curve_v2/queries_50000",
+  "home_config": "config/home_page_selection.json",
+  "sequence_config": "config/sequence_home_selection.json",
+  "ymal_config": "config/ymal_selection.json",
+  "heldout_config": "config/heldout.json",
+  "heldout_selection_run": "results/heldout/20261108T082748Z_selection",
+  "verify": {
+    "confirmation_run": "results/confirmation/20261108T193024Z_confirmation",
+    "home_every_nth_case": 10
+  }
+}
