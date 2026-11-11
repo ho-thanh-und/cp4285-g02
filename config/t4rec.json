@@ -1,0 +1,20 @@
+{
+  "output_directory": "results/t4rec",
+  "sequence_config": "config/sequence_models_feb_apr.json",
+  "compare_sequence_runs": [],
+  "model": {
+    "architecture": "xlnet",
+    "max_length": 20,
+    "d_model": 64,
+    "n_head": 2,
+    "n_layer": 2,
+    "dropout": 0.2,
+    "epochs": 10,
+    "batch_size": 256,
+    "learning_rate": 0.001,
+    "top_n": 50,
+    "seed": 4285
+  },
+  "bootstrap_replicates": 2000,
+  "seed": 4285
+}

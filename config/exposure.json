@@ -1,0 +1,15 @@
+{
+  "output_directory": "results/exposure",
+  "raw_directory": "data/raw",
+  "trained_run": "results/learning_curve_v2/queries_50000",
+  "popularity_window": {"start": "2016-04-01", "end_exclusive": "2016-04-30"},
+  "head_click_share": 0.5,
+  "pages": ["home", "item", "category"],
+  "home_config": "config/home_page_selection.json",
+  "home_run": "results/home_page/20261108T102455Z_selection",
+  "home_sequence_run": "results/sequence_models/20261108T182139Z_selection",
+  "ymal_config": "config/ymal_selection.json",
+  "ymal_run": "results/ymal/20261108T092942Z_selection",
+  "heldout_config": "config/heldout.json",
+  "heldout_run": "results/heldout/20261108T082748Z_selection"
+}

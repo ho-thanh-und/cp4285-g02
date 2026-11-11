@@ -1,0 +1,13 @@
+{
+  "output_directory": "results/error_analysis",
+  "raw_directory": "data/raw",
+  "trained_run": "results/learning_curve_v2/queries_50000",
+  "knn_config": "config/item_knn.json",
+  "category_run": "results/heldout/20261108T082748Z_selection",
+  "category_model": "lightgbm_purchase_session",
+  "ymal_run": "results/ymal/20261108T092942Z_selection",
+  "ymal_config": "config/ymal_selection.json",
+  "home_run": "results/home_page/20261108T102455Z_selection",
+  "home_config": "config/home_page_selection.json",
+  "examples": 8
+}

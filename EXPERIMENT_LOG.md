@@ -1,0 +1,2545 @@
+# Experiment log
+
+This log records the analyses, experiments, decisions and code changes made
+since the 10,000-query learning-curve run (7–8 November 2026). Every number is
+on **validation** data (503 queries, 501 with a click) unless stated otherwise.
+Validation scores are exploratory: several settings were inspected on the same
+queries, and nothing here has been checked on selection or confirmation data.
+
+Result folders under `results/` are local (ignored by Git). Each section names
+the folder it comes from, so the numbers can be checked or regenerated.
+
+Contents
+
+1. [Code and environment changes](#1-code-and-environment-changes)
+2. [Dataset facts](#2-dataset-facts)
+3. [Experiment A: fixed alpha versus session-adaptive alpha](#3-experiment-a-fixed-alpha-versus-session-adaptive-alpha)
+4. [Experiment B: two-tower first-stage filter](#4-experiment-b-two-tower-first-stage-filter)
+5. [Experiment C: filter → LightGBM → rerank pipeline](#5-experiment-c-filter--lightgbm--rerank-pipeline)
+6. [Experiment D (Phase 1): product views and training sessions](#6-experiment-d-phase-1-product-views-and-training-sessions)
+   - [6a. Experiment E (Phase 2, step 1): category-page ranker](#6a-experiment-e-phase-2-step-1-category-page-ranker)
+   - [6b. Experiment F (Phase 2, step 2): scaling to 50,000 training queries](#6b-experiment-f-phase-2-step-2-scaling-to-50000-training-queries)
+   - [6c. Experiment G: classical baseline (item-kNN) and MRR](#6c-experiment-g-classical-baseline-item-knn-and-mrr)
+   - [6d. Experiment H (Phase 5, category pages): held-out selection set](#6d-experiment-h-phase-5-category-pages-held-out-selection-set)
+   - [6e. Experiment I (Phase 4, item page): "You may also like" with 6 + 4](#6e-experiment-i-phase-4-item-page-you-may-also-like-with-6--4)
+   - [6f. Experiment J (Phase 5, item page): held-out selection week](#6f-experiment-j-phase-5-item-page-held-out-selection-week)
+   - [6g. Experiment K (Phase 4, home page): session two-tower vs item-kNN](#6g-experiment-k-phase-4-home-page-session-two-tower-vs-item-knn)
+   - [6h. Experiment L (Phase 5, home page): held-out selection week](#6h-experiment-l-phase-5-home-page-held-out-selection-week)
+   - [6i. Error analysis of the frozen models (selection data)](#6i-error-analysis-of-the-frozen-models-selection-data)
+   - [6j. Experiment M (home page): SASRec and GRU4Rec](#6j-experiment-m-home-page-sasrec-and-gru4rec)
+7. [Decisions](#7-decisions)
+8. [Plan and status](#8-plan-and-status)
+9. [Known issues and caveats](#9-known-issues-and-caveats)
+10. [Commands and files](#10-commands-and-files)
+
+---
+
+## 1. Code and environment changes
+
+**LightGBM training on native Windows (fixed).** Training crashed with
+`OSError: access violation` in `LGBM_DatasetSetField`. Bisecting showed the
+cause is import order: importing pandas *before* LightGBM breaks LightGBM's
+native library on this machine; importing LightGBM first works. Data, label
+types and group sizes were ruled out. Earlier results were produced in WSL,
+which is why this did not show up before.
+
+- `src/session_rerank/__init__.py` now imports LightGBM first, so any script
+  that imports `session_rerank` before pandas is safe.
+- `tests/conftest.py` does the same for the test suite.
+- Test suite on Windows: **192 of 194 pass** (as of §6j, Transformers4Rec bridge; 141 of 143 when
+  first fixed). The 2 failures
+  (`test_anonymous_study.py`, `test_expanded_study.py`, older study pipelines)
+  fail while writing a temporary file at the end of a ~250-character path;
+  most likely the Windows 260-character path limit, not a code fault. Not yet
+  fixed.
+
+**New modules** (each has a `main.py` action, a JSON config and tests):
+
+| Module | Action | Config | Tests |
+|---|---|---|---|
+| `alpha_sweep.py` | `alpha-sweep` | `config/alpha_sweep.json` | `tests/test_alpha_sweep.py` |
+| `two_tower.py` | `two-tower` | `config/two_tower.json` | `tests/test_two_tower.py` |
+| `filter_pipeline.py` | `filter-pipeline` | `config/filter_pipeline.json` | `tests/test_filter_pipeline.py` |
+| `event_ablation.py` | `event-ablation` | `config/event_ablation.json` | `tests/test_event_ablation.py` |
+| `ranker_phase2.py` | `ranker-phase2` | `config/ranker_phase2.json`, `config/ranker_phase2_50k.json` | `tests/test_ranker_phase2.py` |
+| `main.py` (`prepare_data_main`) | `prepare-data` | `config/learning_curve.json` | `tests/test_ranker_phase2.py` |
+| `item_knn.py` | `item-knn` | `config/item_knn.json` (its `compare_with` lists the Phase 2 runs to join) | `tests/test_item_knn.py` |
+| `heldout.py` | `heldout` | `config/heldout.json` | `tests/test_heldout.py` |
+| `ymal.py` | `ymal` | `config/ymal.json` (validation week), `config/ymal_selection.json` (frozen policy, selection week) | `tests/test_ymal.py` |
+| `error_analysis.py` | `error-analysis` | `config/error_analysis.json` | `tests/test_error_analysis.py` |
+| `sequence_models.py` | `sequence-models` | `config/sequence_models.json` (April), `config/sequence_models_feb_apr.json` (February–April) | `tests/test_sequence_models.py` |
+| `external_models.py` | `export-sequences`, `score-external` | `config/t4rec.json` | `tests/test_external_models.py` |
+| `scripts/t4rec/` (`train_t4rec.py`, `requirements-t4rec.txt`, `t4rec.slurm`, `T4REC_GUIDE.md`) | Transformers4Rec in its own environment | `config/t4rec.json` | helpers in `tests/test_external_models.py` |
+| `scripts/cluster/` (`make_sequence_grid.py`, `check_inputs.py`, `collect_sequence_grid.py`, `sequence_grid.slurm`, `sequence_grid.pbs`, `CLUSTER_GUIDE.md`) | cluster job array | generated `config/sequence_grid/` | `tests/test_cluster_scripts.py` |
+| `home_page.py` | `home-page` | `config/home_page.json` (validation week), `config/home_page_selection.json` (frozen policy and model, selection week) | `tests/test_home_page.py` |
+| `exposure.py` | `exposure` | `config/exposure.json` | `tests/test_exposure.py` |
+| `windows.py`, `confirmation.py` | `confirmation` | `config/confirmation.json` + four `*_confirmation.json` page configs | `tests/test_confirmation.py` |
+| `handoff.py`, `serving.py`, `api.py` | `handoff`, `serve` | `config/handoff.json` | `tests/test_serving.py` |
+| `scripts/report/` (`make_figures.py`, `audit_report.py`) | report figures and number audit | result folders named in each script | the audit itself |
+
+**Analysis scripts** moved into the repository: `scripts/analysis/session_lengths.py`
+and `scripts/analysis/click_view.py`. Other dataset facts below were measured
+with short one-off queries; the method is described next to each number.
+
+---
+
+## 2. Dataset facts
+
+### Size of the training pool
+
+- 923,127 queries in total. The April 1–29 training window has 279,058 queries;
+  **145,039** are eligible (whole sessions without any hidden-label query) in
+  **93,231** daily sessions. (An earlier answer quoted 190,738; that counted
+  visible queries individually and ignored that a session with any hidden query
+  is excluded as a whole.)
+- The pilot (`config/anonymous_samples.json`) used 2,000 training queries. It
+  was described as a "small sample" pilot; an older protocol used 12,000. The
+  learning curve now trains 2,000 and 10,000 queries; 50,000 and all remain.
+
+### What a "query" is
+
+- **95% of training queries have no search text.** They are category-page
+  browses (`categoryId > 0`); the remaining 5% are text searches with
+  `categoryId = 0`.
+- Category pages show products from their category: 99.95% of logged
+  candidates and of clicked products belong to the query's category. A category
+  has a median of 513 products (76% of browse queries' categories have more
+  than 200; 27% more than 1,000).
+- Each logged list has **at most 200 products** (median 197). The models only
+  ever rerank these lists. 90% of lists contain a single category, so category
+  diversity is near zero by construction.
+- 99% of post-query clicks are on a logged product (5,878 matched, 51 missing
+  in the pilot sample). Products the site never showed have no click labels.
+
+### Session lengths (`scripts/analysis/session_lengths.py`)
+
+Session = source session ID + date. Project training pool (April, no hidden
+query), 93,231 sessions:
+
+| Per session | Mean | Median | 90th pct | Max | Sessions with ≥ 1 |
+|---|---:|---:|---:|---:|---:|
+| Queries | 1.56 | 1 | 3 | 54 | 100% |
+| Clicks | 2.66 | 1 | 6 | 220 | 100% |
+| Views | 2.86 | 2 | 7 | 87 | 74% |
+| Orders | 0.035 | 0 | 0 | 3 | 3.4% |
+
+- 72.7% of sessions have one query; 6% have four or more.
+- Whole dataset (592,643 sessions): median 1 query, 1 click, 1 view; 2.2% of
+  sessions buy.
+- Every visible session has at least one click. The 35% of all sessions without
+  clicks are almost all hidden-label (competition test) sessions: 73% of those
+  show no click because their clicks were withheld. Training data is therefore
+  "sessions where someone clicked".
+
+### Clicks and views (`scripts/analysis/click_view.py`)
+
+- 69.9% of clicks have a view of the same product in the same session; 67.4%
+  have it at or after the click. Median delay from click to view: **1.5 s**
+  (90th percentile 3.1 s, 99th 10.4 s).
+- 66.2% of views have a click on the same product in the same session; about a
+  third of views have no click behind them.
+- 80.8% of sessions with a click also have a view.
+- Organizer statement (competition forum, relayed from a search summary): clicks
+  cover clicks on site recommendations and site search; views come from other
+  navigation and **view data is sampled** (some views are missing).
+  <https://competitions.codalab.org/forums/7901/1501>
+- Reading: a view is mostly the product page opened by a click; the rest records
+  other browsing. The dataset does not document how a shopper reached a page.
+
+### Click rate by displayed rank (10,000-query training sample)
+
+| Rank | 1 | 2–5 | 6–10 | 11–20 | 21–50 | 51–100 | 101–150 | 151–200 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Click rate | 3.1% | 2.3% | 2.1% | 1.7% | 1.1% | 1.0% | 0.8% | 1.0% |
+| Share of all clicks | 2% | 6% | 6% | 10% | 18% | 23% | 16% | 18% |
+
+- Fitted examination curve: click rate ∝ rank^−0.304 (ranks 1–100). Much
+  flatter than web search: rank 10 keeps two-thirds of rank 1's rate.
+- 57% of clicks are below rank 50; median clicked rank 65–67. The site's
+  original order is weak.
+- These rates mix position bias with the site's own relevance ordering.
+
+### First versus later queries in a session (10,000-query training sample)
+
+| | 1st query | 2nd | 3rd+ |
+|---|---:|---:|---:|
+| Queries | 6,481 | 1,729 | 1,790 |
+| Clicks per query | 1.51 | 1.67 | 1.73 |
+| Median click rank | 65 | 62 | 60 |
+| Token ILD of clicked products (2+ clicks) | 0.856 | 0.861 | 0.860 |
+| Token ILD of the same number of random products | 0.941 | 0.947 | 0.943 |
+| Same category as the previous query | – | 64% | 57% |
+
+- First-query shoppers are not browsing at random: they click products more
+  similar to each other than random ones, as later queries do. A random first
+  list cost two-thirds of NDCG (0.078 vs 0.222 for popularity order).
+- Clicked-product variety does not shrink over a session.
+- 36% of second queries switch category: a candidate signal for adaptation.
+
+### Validation history coverage
+
+- 66.8% of validation queries have no earlier click/view in their session;
+  7.2% have too little (fewer than two usable products); **26.0% (131 queries)**
+  have measurable session variety H (median 0.50, interquartile 0.45–0.61).
+
+### Diversity measures
+
+- Token ILD@10 is close to its ceiling everywhere (≈ 0.89–0.96): most product
+  names share no tokens. Category ILD@10 is ≈ 0.02 on logged lists. The 50/50
+  combined ILD therefore moves very little under any policy.
+
+---
+
+## 3. Experiment A: fixed alpha versus session-adaptive alpha
+
+`results/alpha_sweep/20261108T044340Z_queries_10000/` — `uv run main.py alpha-sweep --trained-run results/learning_curve/queries_10000`
+
+**Definitions.** Greedy reranking picks each next product by
+`alpha × relevance + (1 − alpha) × mean distance to products already chosen`.
+alpha = 1 is relevance only. The exponential policy sets alpha per query from
+session variety H, falling from 1.0 toward 0.2 as H rises; beta is the speed of
+that fall; queries without measurable H use alpha = 0.8.
+
+**Design.** Saved 10,000-query models, no retraining. Policies: relevance;
+fixed alpha 0.95 … 0.2 (draws the trade-off curve); exponential beta 0.1, 0.5,
+1, 2, 5; and a shuffle control that permutes each beta's alphas across the
+measured-history queries. Each adaptive point is compared with the fixed curve
+at the same ILD (NDCG gap), with 2,000 session-bootstrap replicates; reported
+for all queries and for the 131 measured-history queries.
+
+**Results (`purchase_session`, all queries).**
+
+| Policy | Mean alpha | Click NDCG@10 | Combined ILD@10 |
+|---|---:|---:|---:|
+| Relevance | 1.00 | 0.1962 | 0.4669 |
+| Fixed 0.8 | 0.80 | **0.1985** | 0.4774 |
+| Exponential beta 0.1 | 0.74 | 0.1977 | 0.4792 |
+| Exponential beta 5 | 0.66 | 0.1959 | 0.4831 |
+
+- Across 6 models × 5 betas × 2 populations, every NDCG gap to the fixed curve
+  lies between about −0.005 and +0.003; no positive gap has an interval above
+  zero. The shuffle control scores the same as the matched policy.
+- **Conclusion:** on validation, session-variety adaptation does not beat a
+  well-chosen fixed alpha. Mild fixed diversification (alpha ≈ 0.8) adds ILD
+  without losing NDCG.
+
+---
+
+## 4. Experiment B: two-tower first-stage filter
+
+`uv run main.py two-tower --trained-run results/learning_curve/queries_10000`
+
+**Rank-aware training.** Pairs of (clicked product, other product) with weights:
+
+| Product | Weight | Examples (eta = 0.304) |
+|---|---|---|
+| Clicked at rank r | r^eta, capped at 10 | rank 1 → 1.0, rank 10 → 2.0, rank 100 → 4.0 |
+| Shown at rank r, not clicked | r^−eta | rank 1 → 1.0, rank 10 → 0.5, rank 150 → 0.22 |
+| Never shown (same category, or catalog for text search) | 0.5 | |
+
+Pair loss: `w_click × w_other × softplus(score_other − score_click)`. eta is
+fitted to the click-rate curve each run (`propensity_eta: "estimate"`).
+
+**Towers.** Product: name tokens, category, price band, and (from v2)
+popularity. Query: page category or search tokens, earlier clicked/viewed
+products in the session (through the product tower), query position. Score is
+a scaled cosine. Pool to filter: the query's category (category pages) or the
+whole catalog (text search).
+
+**Popularity without leakage (v2).** Daily clicks and views per product from the
+full raw files over April 1–29 (334,858 clicks). A training query on day d sees
+only days before d, as daily rates. Validation sees the whole window. The
+popularity baseline uses the same whole-window counts.
+
+### Runs
+
+| Folder | Variant |
+|---|---|
+| `results/two_tower/20261108T050707Z_queries_10000` | v1: no popularity, eta estimated (0.304) |
+| `results/two_tower/20261108T050906Z_queries_10000` | v1 with eta = 0 (no rank weighting); settings file records it |
+| `results/two_tower/20261108T052545Z_queries_10000` | **v2: with popularity**, eta estimated |
+
+Recall of clicked products when keeping the top K1 (v2 and baselines):
+
+| K1 | Site order | Popularity | Tower v1 | Tower v2 | v2 − popularity (95% CI) |
+|---:|---:|---:|---:|---:|---|
+| Whole category/catalog | | | | | |
+| 20 | 0.260 | 0.379 | 0.248 | 0.348 | −0.031 (−0.058, −0.006) |
+| 50 | 0.459 | 0.581 | 0.448 | 0.572 | −0.009 (−0.035, +0.017) |
+| 100 | 0.687 | 0.756 | 0.584 | 0.729 | −0.027 (−0.053, −0.001) |
+| 200 | 1.000* | 0.882 | 0.712 | 0.853 | −0.030 (−0.053, −0.007) |
+| Logged list only | | | | | |
+| 20 | 0.260 | 0.484 | 0.401 | 0.451 | −0.033 (−0.061, −0.008) |
+| 50 | 0.459 | 0.707 | 0.610 | 0.688 | −0.019 (−0.045, +0.008) |
+
+\* The site's list contains every clicked product by construction.
+
+- **Rank weighting** (v1 vs eta = 0): clearly better only at full-pool K1 = 50
+  (+0.042, CI +0.016 to +0.069); other K1 within noise. One run each.
+- **Popularity input** raised tower recall by about 0.10–0.15, but the tower
+  remains slightly below plain popularity. Text searches (25 validation
+  queries) fail for both (recall ≈ 0). v2 overfits after epoch 3 of 8.
+- In v1, about half of the tower's top 100 were never shown by the site; those
+  products can never count as hits.
+
+**Top-10 lists, before LightGBM** (v2, re-scored after training with the new
+top-10 metrics; future runs write `top10_summary.csv` themselves):
+
+| Top 10 from | Click NDCG@10 | Combined ILD@10 | Category ILD | Never shown |
+|---|---:|---:|---:|---:|
+| Site order | 0.087 | 0.457 | 0.025 | 0% |
+| Popularity (logged list) | **0.201** | 0.469 | 0.021 | 0% |
+| Two-tower (logged list) | 0.172 | 0.464 | 0.023 | 0% |
+| Popularity (whole category) | 0.164 | 0.470 | 0.019 | 23% |
+| Two-tower (whole category) | 0.135 | 0.473 | 0.041 | 21% |
+| Random (logged list) | 0.072 | 0.484 | 0.025 | 0% |
+| *LightGBM `purchase_session`, relevance only* | *0.196* | *0.467* | | *0%* |
+
+- **Sorting the logged list by April popularity (0.201) matches the best
+  LightGBM model (0.196).** LightGBM's popularity features count only the
+  sampled sessions; giving it full-April counts is a Phase 2 item.
+
+---
+
+## 5. Experiment C: filter → LightGBM → rerank pipeline
+
+`results/filter_pipeline/20261108T054207Z_queries_10000/` — `uv run main.py filter-pipeline --trained-run results/learning_curve/queries_10000 --two-tower-run results/two_tower/20261108T052545Z_queries_10000`
+
+For each validation query: choose a pool (logged list; two-tower or popularity
+top K1 from the whole category; or those filters restricted to shown
+products), compute the usual LightGBM features for every pool product, score
+with a saved model, rerank with a policy, and measure the top 10. NDCG and
+recall divide by **all** clicks of the query, so a pool that misses clicked
+products is penalised. Check: the logged-list relevance row reproduces the
+existing ILD exactly (0.4669); NDCG is 0.1949 rather than 0.1962 because the
+denominator now includes the 0.6% of clicks on products outside the list.
+
+`purchase_session`, K1 = 100:
+
+| Pool | Policy | NDCG@10 | ILD@10 | Category ILD | Never shown |
+|---|---|---:|---:|---:|---:|
+| Logged list | relevance | 0.195 | 0.467 | 0.022 | 0% |
+| Logged list | fixed 0.8 | **0.197** | 0.477 | 0.024 | 0% |
+| Logged list | 6 + 4 | 0.191 | 0.485 | 0.031 | 0% |
+| Two-tower, whole category | relevance | 0.154 | 0.480 | 0.044 | 26% |
+| Two-tower, whole category | 6 + 4 | 0.150 | **0.494** | 0.046 | 26% |
+| Popularity, whole category | relevance | 0.154 | 0.482 | 0.046 | 26% |
+| Two-tower, shown only | relevance | 0.190 | 0.456 | 0.002 | 0% |
+| Popularity, shown only | relevance | 0.191 | 0.458 | 0.001 | 0% |
+
+Differences from the logged list (relevance policy, session bootstrap):
+
+- Two-tower K1 = 100, whole category: NDCG −0.041 (−0.057, −0.027);
+  ILD +0.013 (+0.006, +0.020).
+- Two-tower K1 = 100, shown only: NDCG +0.000 (−0.010, +0.010); ILD −0.000.
+
+**Conclusions.**
+
+1. Cutting the logged list to the filter's top 100 does not lose NDCG.
+2. The NDCG drop with never-shown products is a worst case: about 2.6 of 10
+   slots go to products nobody could click. Offline data cannot say whether
+   they are relevant.
+3. Never-shown same-category products double category ILD (0.022 → 0.044), a
+   larger diversity increase than any reranking policy achieves.
+4. The two-tower and popularity filters are tied end to end.
+5. Fixed alpha 0.8 is the best policy in the logged and two-tower pools
+   (slightly above relevance-only); in the popularity pools it is slightly
+   below relevance-only. No adaptive policy beats it in any pool.
+
+---
+
+## 6. Experiment D (Phase 1): product views and training sessions
+
+`results/event_ablation/20261108T064707Z_queries_10000/` — `uv run main.py event-ablation --trained-run results/learning_curve/queries_10000`
+
+**Design.** Rebuild the LightGBM features under three event rules and retrain
+`click_session` and `purchase_session` on two training sets, each with the
+run's full 4-setting grid (48 fits). Validation always uses all 503 queries.
+Check passed: the rebuilt "all events" features equal the cached features.
+
+- Event rules: `all_events` (current); `clicks_only` (no views anywhere in
+  features or popularity); `unexplained_views` (drop a view when the same
+  product was clicked in the same session up to 60 s earlier; removed 58% of
+  views, keeping 8,049 of 19,255).
+- Training sets: `all_sessions` (current, 9,962 click queries);
+  `multi_click_sessions` (sessions with ≥ 2 clicks, 6,397 queries, −36%).
+
+Click NDCG@10, validation-selected trial / mean over the 4 grid settings:
+
+| Events | Training set | `click_session` | `purchase_session` |
+|---|---|---|---|
+| All events | All sessions | 0.194 / 0.189 | 0.196 / 0.189 |
+| Clicks only | All sessions | 0.195 / 0.192 | **0.200** / 0.190 |
+| Unexplained views | All sessions | 0.196 / 0.194 | 0.196 / 0.192 |
+| All events | ≥ 2 clicks | 0.185 / 0.182 | 0.186 / 0.182 |
+| Clicks only | ≥ 2 clicks | 0.180 / 0.179 | 0.189 / 0.181 |
+| Unexplained views | ≥ 2 clicks | 0.183 / 0.180 | 0.185 / 0.181 |
+
+- **Views:** every difference from the current setup lies between −0.002 and
+  +0.005, and every 95% interval includes zero, overall and for queries with
+  and without history.
+- **≥ 2 click sessions:** −0.007 to −0.011 (grid mean) in every combination.
+  Queries with history are unchanged (±0.002); the loss sits in queries without
+  history, e.g. −0.015 (−0.029, −0.001) for clicks-only. A single-click query
+  still teaches LambdaRank one winner against ~140 skipped products.
+- **Hyperparameter sensitivity:** early stopping keeps 4–115 trees, and the
+  four grid settings alone move NDCG by up to 0.017, more than any data choice.
+  Comparisons should use the grid mean, not only the selected trial.
+
+---
+
+## 6a. Experiment E (Phase 2, step 1): category-page ranker
+
+`results/ranker_phase2/20261108T073511Z_queries_10000/` — `uv run main.py ranker-phase2 --trained-run results/learning_curve/queries_10000`
+
+**Design.** All variants follow the agreed data choices: clicks-only features,
+all sessions, text-search queries left out of training and early stopping
+(9,419 click-model training queries). Each variant retrains `click_session` and
+`purchase_session` with the full 4-setting grid. Primary segment: the 476
+category-page validation queries with a click (158 with session history, 318
+without). References on the same queries: the site's original order, and the
+logged list sorted by whole-window click popularity.
+
+| Variant | Change |
+|---|---|
+| `base` | Current ranker under the agreed data choices |
+| `popularity` | + daily click and purchase rates per product over Apr 1–29 from the full raw files (334,858 clicks); a training query on day d sees only days before d |
+| `popularity_position` | + LightGBM position-bias correction (rank buckets 1, 2, 3, 4, 5, 6–10, 11–20, 21–50, 51–100, 101–200) |
+| `popularity_xendcg` | popularity features with the `rank_xendcg` loss instead of LambdaRank |
+| `popularity_lr002` | popularity features with learning rate 0.02 instead of 0.05 |
+
+Click NDCG@10 on category pages, validation-selected trial / grid mean:
+
+| Ranker | `click_session` | `purchase_session` |
+|---|---|---|
+| Site's original order | 0.083 | |
+| **Popularity sort** | 0.198 | |
+| `base` | 0.179 / 0.178 | 0.187 / 0.183 |
+| `popularity` | 0.216 / 0.208 | 0.215 / 0.212 |
+| `popularity_position` | **0.229** / 0.217 | 0.217 / 0.213 |
+| `popularity_xendcg` | 0.221 / **0.219** | **0.228** / **0.223** |
+| `popularity_lr002` | 0.215 / 0.209 | 0.211 / 0.205 |
+
+Differences on category pages (session bootstrap, 95% intervals):
+
+- **Popularity features vs `base`:** +0.028 to +0.037 in every model and
+  statistic; every interval excludes zero (e.g. `click_session` grid mean
+  +0.030, +0.013 to +0.048).
+- **On top of popularity features:** `rank_xendcg` +0.011 (grid mean, both
+  models; intervals −0.001 to +0.024 and −0.000 to +0.022), position correction
+  +0.009 for `click_session` (−0.000 to +0.018) and +0.001 for
+  `purchase_session`, learning rate 0.02 −0.007 to +0.001. None is clearly
+  above zero alone.
+- **Against the popularity sort:** `popularity_xendcg` is the only variant ahead
+  with intervals above zero in all four model/statistic combinations:
+  `click_session` +0.023 (+0.001, +0.047) selected and +0.021 (+0.002, +0.042)
+  grid mean; `purchase_session` +0.030 (+0.008, +0.053) and +0.025 (+0.005,
+  +0.047).
+- **Where the gain comes from:** on category queries **with** session history
+  every popularity variant beats the popularity sort by +0.07 to +0.10
+  (intervals above zero). On queries **without** history they tie with it or
+  fall slightly behind (−0.001 to −0.026). This matches the product decision
+  that cold start uses popularity (§7).
+- **Feature use** (`popularity`, gain share): `category_id` 50–56%, window click
+  rate 21–23%, session token similarity 8–10%, time since the product was last
+  seen in the session 5–6%.
+- **Data choices:** `base` scores 0.188 on all queries against 0.195 for the
+  Phase 1 clicks-only model; the difference comes from leaving text searches
+  out of training and choosing trials on category pages, and is within the
+  grid's own spread (§6).
+
+**Conclusion.** Window popularity is the clear gain. The lead candidate is
+`popularity_xendcg`, the first ranker that beats the popularity sort on category
+pages with intervals above zero. It is chosen on validation after inspecting
+five variants, so it must be confirmed on the selection set (Phase 5).
+
+---
+
+## 6b. Experiment F (Phase 2, step 2): scaling to 50,000 training queries
+
+`results/ranker_phase2/20261108T075158Z_queries_50000/` — data prepared with
+`uv run main.py prepare-data --queries 50000 --curve-root results/learning_curve_v2`, then
+`uv run main.py ranker-phase2 --trained-run results/learning_curve_v2/queries_50000 --phase2-config config/ranker_phase2_50k.json`
+
+**Data.** 50,000 training queries, 7,360,538 candidate rows (645 MB folder);
+47,347 category-page click queries used for training. The 50k sample nests the
+10k sample and uses the same 503 validation queries (both checked by the
+preparation code). A new curve folder `results/learning_curve_v2` was needed
+because the original `results/learning_curve` fingerprints code and config
+that the uncommitted K1-filter edits changed; the data-preparation code itself
+is unchanged.
+
+**New `prepare-data` action** (`main.py`, `prepare_data_main`): runs only the
+sampling and feature-cache steps of manual training, without fitting the six
+learning-curve models. A later `train` with the same `--queries` and
+`--curve-root` resumes from these stages. To fit 50k in memory (1.6 GB free of
+15 GB), feature rebuilding now fills one array of the final size instead of
+stacking copies, and Phase 2 reads only the candidate columns it needs.
+
+**Variants** (`config/ranker_phase2_50k.json`): `popularity` (LambdaRank),
+`popularity_xendcg`, `popularity_position`; `base` and learning rate 0.02 were
+settled at 10k. Here "difference vs base" in `differences.csv` means vs the
+`popularity` LambdaRank model.
+
+Click NDCG@10 on category pages (476 queries), selected trial / grid mean:
+
+| Ranker | 10k `click_session` | **50k `click_session`** | 10k `purchase_session` | **50k `purchase_session`** |
+|---|---|---|---|---|
+| Popularity sort | 0.198 | 0.198 | | |
+| `popularity` | 0.216 / 0.208 | 0.231 / 0.229 | 0.215 / 0.212 | 0.230 / 0.223 |
+| `popularity_xendcg` | 0.221 / 0.219 | 0.231 / 0.229 | 0.228 / 0.223 | **0.232 / 0.231** |
+| `popularity_position` | 0.229 / 0.217 | **0.235** / 0.229 | 0.217 / 0.213 | 0.228 / 0.225 |
+
+- **More data helps:** 50k vs 10k (grid mean, same variant) +0.008 to +0.021,
+  every interval above zero (e.g. `popularity` `click_session` +0.021, +0.009
+  to +0.034). Selected-trial gains are similar but their intervals touch zero.
+- **The variants converge at 50k:** xendcg and position correction vs
+  LambdaRank are within ±0.008 with intervals around zero (best: xendcg
+  `purchase_session` grid mean +0.008, −0.002 to +0.017).
+- **All three beat the popularity sort** on category pages: +0.025 to +0.037,
+  intervals above zero in all 12 model/variant/statistic combinations (e.g.
+  `popularity_xendcg` `purchase_session` grid mean +0.033, +0.012 to +0.056).
+- **Segments:** with session history +0.10 to +0.12 over the popularity sort
+  (intervals above zero); without history a tie (−0.012 to +0.002). xendcg is
+  the closest to the popularity sort without history (−0.002 to +0.000).
+- Early stopping still keeps few trees (6–90). Feature use (xendcg): category ID
+  ~40%, window click rate ~32%, time since last seen in session 7–10%, session
+  token similarity ~6%.
+
+**Conclusion (6b).** The ranker keeps improving with data, and the loss choice and
+position correction stop mattering at 50k. `popularity_xendcg` stays the lead
+candidate: never behind the others, best `purchase_session` grid mean, and
+level with the popularity sort on cold queries. The all-data size (~145k
+queries, ~21M rows) would need roughly 3–4 GB at peak with the current code,
+more than is free on this machine.
+
+---
+
+## 6c. Experiment G: classical baseline (item-kNN) and MRR
+
+`results/item_knn/20261108T081521Z_queries_50000/` — `uv run main.py item-knn --trained-run results/learning_curve_v2/queries_50000`
+(lead ranker rerun with MRR: `results/ranker_phase2/20261108T081226Z_queries_50000/`, `config/ranker_lead_50k.json`)
+
+**MRR@10** (`reciprocal_rank` in `event_ablation.py`): 1 / position of the first
+clicked product in the top 10, 0 if none, undefined for queries without a
+clicked candidate (same population as NDCG). Added to every per-query result of
+Phases 1–2 and the baseline. It lives outside `adaptive_policies.py` on
+purpose: the learning-curve folders fingerprint that file.
+
+**Item-kNN** (`item_knn.py`), the classical collaborative filter:
+- Baskets: distinct clicked products per visible session over Apr 1–29 from
+  the raw files (115,936 sessions, 56,479 with ≥ 2 products; 334,858 clicks;
+  at most 50 most recent products per session).
+- Similarity: co-click cosine, `co_clicks(i, j) / sqrt(sessions(i) × sessions(j))`,
+  no shrinkage; 1,221,630 product pairs over 45,480 clicked products.
+- Ranking: sum of similarities to the products clicked earlier in the session;
+  ties and cold shoppers fall back to window click popularity, then the site's
+  order. Without history it equals the popularity sort (checked by a test).
+- Coverage: 164 validation queries have earlier clicks; in 130 of them at least
+  one candidate was co-clicked with a history product.
+
+The lead ranker was retrained to add MRR; it reproduced §6b exactly
+(`click_session` 0.2290, `purchase_session` 0.2310 grid mean), confirming that
+training is deterministic.
+
+**Comparison on identical category-page queries** (476; LightGBM = grid mean of
+`popularity_xendcg`, 50k):
+
+| Method | NDCG@10 | Recall@10 | MRR@10 | NDCG@10 with history (158) | NDCG@10 no history (318) |
+|---|---:|---:|---:|---:|---:|
+| Site's original order | 0.083 | 0.146 | 0.073 | 0.079 | 0.085 |
+| Popularity sort | 0.198 | 0.336 | 0.175 | 0.150 | 0.222 |
+| Item-kNN (co-click CF) | 0.206 | 0.346 | 0.183 | 0.173 | 0.222 |
+| LightGBM xendcg, `click_session` | 0.229 | 0.372 | 0.203 | 0.247 | 0.220 |
+| **LightGBM xendcg, `purchase_session`** | **0.231** | **0.374** | **0.204** | **0.252** | 0.221 |
+
+Differences (session bootstrap, 95% intervals), category pages:
+
+- **Item-kNN vs popularity sort:** NDCG +0.008 (−0.005, +0.021); with history
+  +0.023 (−0.014, +0.062). Helpful in direction, not clearly above zero.
+- **LightGBM vs item-kNN:** `purchase_session` NDCG +0.025 (+0.003, +0.047),
+  recall +0.028 (+0.001, +0.055), MRR +0.021 (−0.001, +0.045); with history
+  NDCG +0.078 (+0.020, +0.143). `click_session` is similar (+0.023, +0.003 to
+  +0.047).
+- **LightGBM vs popularity sort:** NDCG +0.033 (+0.014, +0.056), recall +0.038
+  (+0.010, +0.069), MRR +0.029 (+0.006, +0.053).
+- Without history all methods except the site's order tie (differences within
+  ±0.005).
+
+**Conclusion (6c).** The learned ranker beats both the non-personalised baseline and
+the classical CF baseline on all three metrics, and the advantage sits in
+sessions with history. Co-click CF alone is a weak personaliser here (most
+sessions are short and one-category), but it is the natural model for the item
+page.
+
+---
+
+## 6d. Experiment H (Phase 5, category pages): held-out selection set
+
+`results/heldout/20261108T082748Z_selection/` — `uv run main.py heldout` (`config/heldout.json`)
+
+**First held-out result.** These 1,000 selection queries (May 9–14, 614
+sessions, 996 with a click, 962 category pages, 152,880 candidates) were never
+used for any choice before this run.
+
+**Procedure** (`heldout.py`), each step completed before the next:
+
+1. **Freeze** (`frozen_choices.json`), written before any selection data was
+   read: clicks-only features, all sessions, no text searches in training;
+   lead ranker `popularity_xendcg` trained on 50k queries with each model's
+   validation-selected setting (`click_session`: 31 leaves, min rows 100, 47
+   trees; `purchase_session`: 15 leaves, min rows 100, 74 trees); item-kNN as
+   in §6c; metrics NDCG@10, Recall@10, MRR@10; declared rule: choose the
+   LightGBM model with the higher selection category-page click NDCG@10, ties to
+   `click_session`. Recorded code state: commit `75367ca` plus uncommitted
+   changes (the held-out module itself, committed afterwards).
+2. **Retrain** the frozen models with that setting and tree count. Check
+   passed: on validation they reproduce the Phase 2 per-query scores exactly.
+3. **Rebuild the selection split** with the pipeline's sampling and database
+   code. Check passed: query IDs equal the pilot's reserved selection IDs.
+4. **Features and labels** as for validation; similarity and popularity from
+   the April training window only.
+5. **Confirmation stays sealed**: the code refuses to open it until the home
+   page and "You may also like" choices are frozen.
+
+**Results on selection, category pages (962 queries):**
+
+| Method | NDCG@10 | Recall@10 | MRR@10 | NDCG with history (356) | NDCG no history (606) |
+|---|---:|---:|---:|---:|---:|
+| Site's original order | 0.065 | 0.118 | 0.056 | 0.063 | 0.067 |
+| Popularity sort | 0.174 | 0.283 | 0.161 | 0.160 | 0.183 |
+| Item-kNN (co-click CF) | 0.176 | 0.291 | 0.159 | 0.163 | 0.183 |
+| LightGBM `click_session` | 0.203 | 0.322 | **0.186** | 0.223 | **0.192** |
+| **LightGBM `purchase_session`** (chosen) | **0.203** | **0.326** | 0.185 | **0.229** | 0.189 |
+
+Differences (session bootstrap, 95% intervals):
+
+- **LightGBM vs popularity sort:** `purchase_session` NDCG +0.029 (+0.016,
+  +0.042), recall +0.043 (+0.025, +0.062), MRR +0.024 (+0.011, +0.037). With
+  history NDCG +0.069 (+0.040, +0.101). `click_session` is the same within
+  0.005.
+- **LightGBM vs item-kNN:** NDCG +0.028 (+0.014, +0.041), recall +0.035
+  (+0.015, +0.055), MRR +0.027 (+0.013, +0.041).
+- **Item-kNN vs popularity sort:** NDCG +0.001 (−0.008, +0.011); no measurable
+  gain.
+- **Without history** LightGBM is now slightly ahead of the popularity sort
+  (`click_session` NDCG +0.009, +0.001 to +0.016), where validation showed a
+  tie.
+
+**Choice by the declared rule:** `purchase_session` 0.20346 vs `click_session`
+0.20336 category-page NDCG, a difference of 0.0001 — effectively a tie that the
+rule resolves to `purchase_session` (`selection_choice.json`).
+
+**Reading.** Every validation conclusion held on untouched data: the learned
+ranker beats both baselines on all three metrics with intervals above zero,
+item-kNN adds nothing measurable over popularity, and the gain sits in sessions
+with history. Absolute scores are lower than on validation (0.20 vs 0.23),
+which reflects a different week of traffic, so only same-query comparisons
+should be read.
+
+---
+
+## 6e. Experiment I (Phase 4, item page): "You may also like" with 6 + 4
+
+`results/ymal/20261108T090850Z_validation/` — `uv run main.py ymal` (`config/ymal.json`)
+
+**Design** (`ymal.py`), following the product rules (clicks only, no penalty
+for unclicked products):
+
+- **Item pages:** every product clicked in an eligible session (no hidden-label
+  query) of the validation week, May 1–7, from the raw files: 18,645 sessions,
+  49,845 clicks. A page is evaluable when the shopper clicked a different
+  product later in the session (26,419 pages); 20,000 were sampled with a fixed
+  seed. Later clicks are the hits; pages without one are skipped. The code
+  accepts only the validation and selection weeks.
+- **Pool:** the item's top co-click neighbours from April (item-kNN cosine,
+  §6c), K1 = 20 or 50, filled with the item category's most popular products
+  when there are too few. 17,997 pages (90%) have at least one neighbour.
+- **Methods:** category popularity (cold baseline), relevance only, fixed
+  alpha 0.8, and 6 + 4 (six most relevant, then four mutually diverse from the
+  rest of the pool), each with K1 = 20 and 50.
+- **Metrics:** Recall@10, hit rate, MRR@10, NDCG@10 against later clicks;
+  combined/token/category ILD@10, distinct categories, share outside the item's
+  category, and tail-to-head distance (positions 7–10 vs 1–6).
+
+**Results** (20,000 pages; intervals from 2,000 session-bootstrap replicates):
+
+| Method | Recall@10 | Hit rate | MRR@10 | NDCG@10 | ILD@10 | Category ILD | Categories in list | Tail-to-head |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Category popularity | 0.142 | 0.298 | 0.118 | 0.098 | 0.460 | 0.000 | 1.0 | 0.459 |
+| **Relevance only** (item-kNN) | **0.148** | **0.316** | **0.136** | **0.107** | 0.617 | 0.299 | 2.4 | 0.628 |
+| Fixed alpha 0.8, K1 = 20 | 0.140 | 0.306 | 0.133 | 0.103 | 0.650 | 0.355 | 2.8 | 0.656 |
+| Fixed alpha 0.8, K1 = 50 | 0.139 | 0.304 | 0.132 | 0.102 | 0.659 | 0.373 | 2.9 | 0.666 |
+| **6 + 4, K1 = 20** | 0.134 | 0.294 | 0.134 | 0.101 | 0.685 | 0.416 | 3.2 | 0.714 |
+| **6 + 4, K1 = 50** | 0.128 | 0.284 | 0.133 | 0.098 | **0.727** | **0.497** | **3.7** | **0.775** |
+
+(Relevance only is identical for K1 = 20 and 50: the pool size only matters to
+the diversity policies.)
+
+- **Item-kNN beats category popularity** on every relevance metric: recall
+  +0.006 (+0.001, +0.012), hit +0.017, MRR +0.018, NDCG +0.010; all intervals
+  above zero. Its lists already span 2.4 categories on average, against 1.0.
+- **Cost and gain of diversity against relevance only** (all intervals exclude
+  zero):
+
+  | Policy | Recall | Hit rate | MRR | NDCG (relative) | ILD | Category ILD | Tail-to-head |
+  |---|---:|---:|---:|---:|---:|---:|---:|
+  | Fixed 0.8, K1 = 20 | −0.008 | −0.010 | −0.003 | −0.004 (−4.0%) | +0.033 | +0.056 | +0.028 |
+  | Fixed 0.8, K1 = 50 | −0.009 | −0.012 | −0.004 | −0.005 (−5.0%) | +0.042 | +0.073 | +0.038 |
+  | 6 + 4, K1 = 20 | −0.014 | −0.022 | −0.002 | −0.006 (−5.8%) | +0.068 | +0.116 | +0.086 |
+  | 6 + 4, K1 = 50 | −0.020 | −0.032 | −0.004 | −0.009 (−8.3%) | +0.110 | +0.197 | +0.147 |
+
+- **6 + 4 keeps the top of the list:** MRR drops by only 0.002–0.004 because
+  positions 1–6 are unchanged; its cost sits in hits at positions 7–10. Fixed
+  alpha changes the whole list and gives about half the diversity for about
+  half the recall cost.
+- **The diverse tail really differs from the head:** tail-to-head distance
+  rises from 0.63 to 0.71 (K1 = 20) or 0.77 (K1 = 50).
+- **Unlike category pages, ILD moves here**, because recommendations can cross
+  categories (category ILD 0.30–0.50 against 0.02 on category pages).
+- **Caveat:** later clicks can only land on products the shopper was shown on
+  the site, and cross-category products were shown less often. The relevance
+  cost of diversity is therefore likely overstated offline.
+
+**Decision rule check.** The plan's rule (§8, Phase 4: most ILD within 5% NDCG
+loss) admits fixed alpha 0.8 with K1 = 20 (−4.0%) and rejects 6 + 4 (−5.8% and
+−8.3%); the product brief asked for 6 + 4 on this page.
+
+**Decision (user, 2026-11-08): fixed alpha 0.8 with K1 = 20**, following the
+declared rule. K1 = 50 was not chosen because it lands at −5.0%. Speed was
+checked and does not separate the policies: on a 20-product pool fixed alpha
+takes 0.08 ms and 6 + 4 0.06 ms, both dwarfed by the 4 ms needed for product
+distances, which both policies use (and which can be precomputed per product
+for the website).
+
+---
+
+## 6f. Experiment J (Phase 5, item page): held-out selection week
+
+`results/ymal/20261108T092942Z_selection/` — `uv run main.py ymal --ymal-config config/ymal_selection.json`
+
+**Procedure.** `frozen_choices.json` (policy `fixed_0.8_20`, the user's reason,
+similarity settings, metrics, code state: commit `acd20f7` plus the uncommitted
+freeze code) was written before the week was read. The code refuses the
+selection week without a frozen policy. Week May 9–14: 19,270 eligible sessions,
+55,157 clicks, 29,951 evaluable item pages, 20,000 sampled with the fixed seed;
+17,625 (88%) have co-click neighbours. All policies are still scored on the
+same pages for comparison.
+
+| Method | Recall@10 | Hit rate | MRR@10 | NDCG@10 | ILD@10 | Category ILD | Categories in list | Tail-to-head |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Category popularity | 0.139 | 0.291 | 0.112 | 0.091 | 0.458 | 0.000 | 1.0 | 0.458 |
+| Relevance only (item-kNN) | 0.145 | 0.304 | 0.128 | 0.101 | 0.620 | 0.304 | 2.5 | 0.631 |
+| **Fixed alpha 0.8, K1 = 20 (frozen)** | 0.139 | 0.295 | 0.125 | 0.097 | 0.652 | 0.360 | 2.8 | 0.659 |
+| 6 + 4, K1 = 20 | 0.132 | 0.283 | 0.126 | 0.095 | 0.687 | 0.421 | 3.2 | 0.716 |
+| 6 + 4, K1 = 50 | 0.126 | 0.272 | 0.125 | 0.093 | 0.727 | 0.497 | 3.7 | 0.774 |
+
+- **Frozen policy vs relevance only:** NDCG −0.003 (−3.3%, interval −0.0037
+  to −0.0029), recall −0.006, MRR −0.003; ILD +0.033 (+0.032, +0.033), category
+  ILD +0.056, tail-to-head +0.029. Inside the 5% rule, as on validation (−4.0%).
+- **Frozen policy vs category popularity (the cold baseline):** NDCG +0.007
+  (+0.003, +0.010), MRR +0.013 (+0.008, +0.019); recall and hit rate level
+  (intervals around zero); ILD +0.194 and 2.8 categories instead of 1.0.
+- **Item-kNN relevance vs category popularity** again beats it on every
+  relevance metric (NDCG +0.010, +0.006 to +0.014).
+- 6 + 4 with K1 = 20 costs −5.5% NDCG for +0.068 ILD, repeating the validation
+  trade-off.
+
+**Reading.** The item-page results held on the untouched week: item-kNN is the
+right base for "You may also like", and the frozen fixed-alpha policy stays
+within the declared relevance budget while adding measurable cross-category
+variety.
+
+---
+
+## 6g. Experiment K (Phase 4, home page): session two-tower vs item-kNN
+
+`results/home_page/20261108T095146Z_validation/` — `uv run main.py home-page` (`config/home_page.json`)
+
+**Design** (`home_page.py`):
+
+- **Session two-tower** trained on every eligible April session in the raw
+  files: each prefix of a session's distinct clicks (last 20) predicts the next
+  clicked product (128,825 examples). Session side: mean and last of the
+  clicked products' vectors plus session length. Product side: name tokens,
+  category, price band, leak-safe daily click and purchase rates. Sampled
+  softmax against 10 uniform and 10 popularity-weighted random products; epoch
+  chosen on a fixed 3,000-case subset of the validation week (best: epoch 5 of
+  5; check recall@10 0.136, 0.123, 0.134, 0.135, 0.138). Model saved for reuse.
+- **Cases:** in the validation week's 18,645 eligible sessions, every point
+  after at least one click with a later click on a different product (26,419;
+  20,000 sampled). 10 products from the whole catalog, excluding products
+  already clicked; hits are the later clicks; no penalty otherwise. Cold start
+  (no clicks) is popularity and can only be measured online.
+- **Methods:** popularity, trending (last 7 days of April), item-kNN on the
+  session's clicks (sum of co-click similarities), the two-tower; then relevance
+  only, fixed alpha 0.8 and 6 + 4 over a 20-product pool of the two-tower and of
+  item-kNN.
+
+**Results** (20,000 cases; intervals from 2,000 session-bootstrap replicates):
+
+| Method | Recall@10 | Hit rate | MRR@10 | NDCG@10 | ILD@10 | Category ILD | Categories in list | Outside last click's category |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Popularity | 0.004 | 0.011 | 0.006 | 0.004 | 0.663 | 0.381 | 3.0 | 94% |
+| Trending | 0.006 | 0.015 | 0.003 | 0.003 | 0.656 | 0.377 | 3.0 | 94% |
+| **Item-kNN** | **0.157** | **0.329** | **0.149** | **0.121** | 0.628 | 0.318 | 2.5 | 31% |
+| Two-tower | 0.137 | 0.302 | 0.123 | 0.100 | 0.441 | 0.012 | 1.0 | 1% |
+| Two-tower + fixed 0.8 | 0.137 | 0.302 | 0.123 | 0.099 | 0.444 | 0.014 | 1.1 | 1% |
+| Two-tower + 6 + 4 | 0.133 | 0.300 | 0.123 | 0.098 | 0.463 | 0.024 | 1.1 | 2% |
+| **Item-kNN + fixed 0.8** | 0.151 | 0.321 | 0.147 | 0.117 | 0.667 | 0.388 | 2.9 | 35% |
+| Item-kNN + 6 + 4 | 0.141 | 0.309 | 0.147 | 0.114 | 0.712 | 0.467 | 3.4 | 39% |
+
+- **Catalog-wide popularity fails** (recall 0.004): without a category, the
+  most popular products overall are rarely what a shopper clicks next.
+  Personalisation after the first click is essential on this page.
+- **Item-kNN beats the two-tower:** recall +0.020 (+0.013, +0.025), MRR +0.026
+  (+0.018, +0.035), NDCG +0.021 (+0.015, +0.028). After one click the two are
+  level on recall (0.174 each) with item-kNN ahead on NDCG (0.118 vs 0.109);
+  after two or more clicks item-kNN is clearly ahead (NDCG 0.123 vs 0.095).
+- **The two-tower is almost single-category:** 99% of its products share the
+  last clicked product's category (category ILD 0.012). Its 20-product pool
+  therefore leaves fixed alpha and 6 + 4 almost nothing to diversify (ILD +0.003
+  and +0.022).
+- **Diversity on item-kNN** (against item-kNN relevance only): fixed 0.8 costs
+  NDCG −0.004 (−3.0%) for ILD +0.039 and 2.9 categories; 6 + 4 costs −5.9% for
+  ILD +0.084 and 3.4 categories, the same trade-off as on the item page.
+- **Rule check** (most ILD within 5% NDCG loss, applied to the best base): item-
+  kNN + fixed alpha 0.8 passes (−3.0%); 6 + 4 does not (−5.9%).
+
+**Reading.** On this proxy the classical co-click filter is both more accurate
+and more diverse than the neural session model, which learned to stay inside
+the last category. Possible two-tower improvements (more epochs, larger
+embeddings, a category-mixing negative sampler) were not tried.
+
+**Decision (user, 2026-11-08): item-kNN with fixed alpha 0.8 over a 20-product
+pool** for the home page after the first click (popularity before it). This
+replaces the brief's two-tower, following the data and the declared 5% rule.
+The session two-tower stays in the study as the evaluated neural model.
+Frozen in `config/home_page_selection.json` (frozen run = this folder).
+
+---
+
+## 6h. Experiment L (Phase 5, home page): held-out selection week
+
+`results/home_page/20261108T102455Z_selection/` — `uv run main.py home-page --home-config config/home_page_selection.json`
+
+**Procedure.** `frozen_choices.json` (policy `fixed_0.8_item_knn`, the user's
+reason, saved model path; code: commit `56f562a` plus the uncommitted home-page
+code) was written before the week was read. The saved session two-tower was
+reused, not retrained. Week May 9–14: 19,270 eligible sessions, 29,951
+evaluable cases, 20,000 sampled.
+
+| Method | Recall@10 | Hit rate | MRR@10 | NDCG@10 | ILD@10 | Category ILD | Categories in list |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Popularity | 0.001 | 0.005 | 0.001 | 0.001 | 0.662 | 0.379 | 3.0 |
+| Trending | 0.002 | 0.009 | 0.002 | 0.001 | 0.656 | 0.377 | 3.0 |
+| Item-kNN | 0.151 | 0.309 | 0.133 | 0.105 | 0.640 | 0.343 | 2.6 |
+| Two-tower | 0.138 | 0.293 | 0.116 | 0.092 | 0.442 | 0.016 | 1.1 |
+| **Item-kNN + fixed 0.8 (frozen)** | 0.146 | 0.302 | 0.130 | 0.102 | **0.680** | **0.414** | **3.1** |
+| Item-kNN + 6 + 4 | 0.136 | 0.288 | 0.130 | 0.099 | 0.725 | 0.493 | 3.6 |
+
+- **Frozen policy vs item-kNN relevance only:** NDCG −0.003 (−3.1%), ILD
+  +0.040; inside the 5% rule, as on validation (−3.0%, +0.039).
+- **Frozen policy vs the two-tower:** NDCG +0.010 (+0.005, +0.014), MRR
+  +0.014 (+0.007, +0.020), recall +0.008 (+0.002, +0.014), ILD +0.238.
+- **Item-kNN vs the two-tower:** NDCG +0.013 (+0.008, +0.017); the validation
+  ranking held.
+- Catalog-wide popularity again fails once a shopper has clicked (NDCG 0.001).
+
+**Reading.** All three pages are now frozen and confirmed on the untouched
+selection week. The confirmation week can be opened once, for all three.
+
+---
+
+## 6i. Error analysis of the frozen models (selection data)
+
+`results/error_analysis/20261108T105517Z/` — `uv run main.py error-analysis` (`config/error_analysis.json`)
+
+No new models. Category pages: the frozen LightGBM `purchase_session` against
+the popularity sort, per query. Item page and home page: the selection cases are
+rebuilt exactly (checked against the saved results) and each case gets context:
+whether any later click was in the frozen 20-product pool, the category of the
+later clicks, co-click neighbours, and April popularity. No bug or data problem
+was found, so no model is changed before the confirmation week.
+
+### Category pages (962 queries)
+
+| Breakdown | Cases | LightGBM NDCG | Popularity NDCG | Difference | Win / loss |
+|---|---:|---:|---:|---:|---|
+| No session history | 606 | 0.189 | 0.183 | +0.006 | 11% / 11% |
+| With session history | 356 | 0.229 | 0.160 | **+0.069** | 24% / 13% |
+| 1st query in session | 593 | 0.186 | 0.180 | +0.006 | 11% / 11% |
+| 3rd+ query in session | 190 | 0.272 | 0.176 | **+0.096** | 32% / 14% |
+| First click at site rank 1–10 | 152 | 0.356 | 0.359 | −0.002 | 15% / 15% |
+| First click at site rank 101+ | 295 | 0.115 | 0.081 | +0.034 | 13% / 8% |
+| A clicked product had no April clicks | 150 | 0.067 | 0.053 | +0.014 | 10% / 6% |
+| All clicked products had April clicks | 812 | 0.229 | 0.197 | +0.032 | 17% / 13% |
+
+Failure modes:
+
+1. **Most queries are missed by both methods:** in 58% neither LightGBM nor
+   the popularity sort puts a clicked product in the top 10. Shoppers click
+   deep (31% of first clicks are below the site's rank 100) among ~150
+   candidates, so a top 10 often cannot reach them.
+2. **No gain on the first query of a session** (+0.006): without history the
+   ranker has little beyond popularity. The gain grows with history (3rd+
+   query: +0.096).
+3. **Products with no April clicks** (16% of queries click one): both methods
+   rank them low (NDCG 0.07 vs 0.23); popularity-driven features cannot help.
+4. **Over-personalisation:** the worst losses are queries where the clicked
+   product was the list's most popular one and session features pushed it down
+   (e.g. NDCG 1.00 → 0.00 in two queries with history).
+5. **Category spread:** among categories with ≥ 15 queries, differences range
+   from −0.001 to +0.124; some categories gain nothing.
+
+### Item page, "You may also like" (20,000 pages)
+
+| Breakdown | Pages | Frozen NDCG | Category-popularity NDCG | Frozen hit | Popularity hit |
+|---|---:|---:|---:|---:|---:|
+| A later click is in the 20-product pool | 7,325 (37%) | 0.241 | 0.150 | 0.715 | 0.473 |
+| No later click in the pool | 12,675 (63%) | 0.014 | 0.057 | 0.052 | 0.185 |
+| No co-click neighbours | 2,375 (12%) | 0.064 | 0.064 | 0.212 | 0.213 |
+| Later clicks all in other categories | 2,975 (15%) | 0.001 | 0.000 | | |
+| Item with 100+ April clicks | 1,342 | 0.158 | 0.099 | | |
+| Item with 1–9 April clicks | 6,450 | 0.079 | 0.081 | | |
+
+Failure modes:
+
+1. **Candidate recall, not reranking, is the bottleneck:** only 37% of pages
+   have any later click among the item's 20 co-click neighbours (53% among all
+   its neighbours). When one is there, the frozen list hits 72% of the time;
+   when none is, it hits 5% while category popularity still hits 19%.
+2. **Items without co-click neighbours** (12%) fall back to category popularity.
+3. **Category switches are unpredictable:** on 15% of pages every later click
+   is in another category, and every method scores ~0.
+4. **Rarely clicked items** (fewer than 10 April clicks, 43% of pages) gain
+   nothing over category popularity; the gain sits in popular items (+0.059).
+
+### Home page (20,000 cases)
+
+| Breakdown | Cases | Frozen NDCG | Two-tower NDCG | Difference |
+|---|---:|---:|---:|---:|
+| A later click is in the 20-product pool | 8,398 (42%) | 0.242 | 0.147 | +0.095 |
+| No later click in the pool | 11,602 (58%) | 0.000 | 0.052 | −0.052 |
+| 1 click so far | 6,232 | 0.114 | 0.113 | +0.002 |
+| 3–5 clicks so far | 5,374 | 0.104 | 0.082 | +0.022 |
+| Last click on a product with no April clicks | 2,150 | 0.045 | 0.071 | **−0.025** |
+| Last click on a product with 100+ April clicks | 1,342 | 0.158 | 0.116 | +0.042 |
+| Later clicks all in other categories | 2,975 | 0.004 | 0.000 | +0.004 |
+
+Failure modes:
+
+1. **Candidate recall again:** 58% of cases have no later click in the
+   item-kNN pool, and the frozen list scores 0 there; the two-tower still
+   reaches 0.052 on those cases.
+2. **Cold products favour the neural model:** when the last click is on a
+   product with no April clicks (11%), co-click data is empty and the content-
+   based two-tower (name, category, price) wins (−0.025 for item-kNN).
+3. **One click is not enough to beat the two-tower** (tie); item-kNN pulls
+   ahead with 2–5 clicks.
+4. **Category switches** (15%) are missed by every method.
+
+### Implications (not applied before confirmation)
+
+- The main limit on both item-kNN pages is **which products enter the pool**,
+  not how the pool is ordered. A larger or blended pool would raise the
+  ceiling.
+- A **hybrid** that falls back to the two-tower when the clicked products have
+  no co-click neighbours or no April clicks would address the cold-product
+  failure on the home page. This is future work: changing a frozen model now
+  would require a new selection run.
+- On category pages, the ranker helps exactly where session information exists
+  and cannot fix products without history; this supports popularity for cold
+  start and motivates the cold-product limitation in the report.
+
+---
+
+## 6j. Experiment M (home page): SASRec and GRU4Rec
+
+`uv run main.py sequence-models` (`config/sequence_models.json`, `sequence_models.py`)
+
+**Design.** Both models read a session's clicks in order and predict the next
+clicked product. Training: every eligible April session in the raw files,
+clicks only, products in order of first click, the last 20; next-product
+prediction at every position of the 42,299 sessions with two or more known
+clicks (126,406 positions). Each model learns one 64-dimensional vector per
+product clicked in April (40,683 products; 3.3% of cases have no known click
+and fall back to popularity; 94% of cases have a later click inside this
+vocabulary). Sampled softmax against 2,000 shared products per batch (half
+uniform, half popularity-weighted, accidental hits masked); Adam, learning
+rate 0.001, batch 128 sessions, dropout 0.2. GRU4Rec: one GRU layer. SASRec: 2
+causal self-attention blocks, 2 heads, position embeddings. The epoch with the
+best recall@10 on the same 3,000-case validation subset as the session
+two-tower is kept. Evaluation on exactly the 20,000 cases of the home-page run
+(§6g), joined with its saved results for paired differences.
+
+**Run 1, failed to train** (`results/sequence_models/20261108T110911Z_validation/`,
+10 epochs). SASRec's loss stayed at 7.6 ≈ ln(2,001), chance level against 2,001
+candidates (recall@10 0.001); GRU4Rec was still improving at epoch 10 (check
+recall 0.020). Cause: PyTorch's default embedding initialisation (standard
+deviation 1) gives huge dot-product scores and saturates the softmax (SASRec's
+first-epoch loss was 21.8). Not a model result.
+
+**Run 2** (`results/sequence_models/20261108T111930Z_validation/`): embeddings
+initialised with standard deviation 0.02, as in the reference implementations,
+and 20 epochs. SASRec's check recall peaked at epoch 6 (0.158) and stayed near
+0.147–0.153 afterwards; GRU4Rec was still improving at epoch 20 (0.109).
+Training took about 2–4 minutes per model on the laptop CPU.
+
+| Method | Recall@10 | Hit rate | MRR@10 | NDCG@10 | ILD@10 |
+|---|---:|---:|---:|---:|---:|
+| Popularity | 0.004 | 0.011 | 0.006 | 0.004 | 0.663 |
+| Item-kNN | 0.157 | 0.329 | 0.149 | 0.121 | 0.628 |
+| Item-kNN + fixed 0.8 (frozen home policy) | 0.151 | 0.321 | 0.147 | 0.117 | 0.667 |
+| Session two-tower | 0.137 | 0.302 | 0.123 | 0.100 | 0.441 |
+| **SASRec** | **0.169** | **0.352** | **0.160** | **0.129** | 0.555 |
+| GRU4Rec (under-trained) | 0.111 | 0.246 | 0.105 | 0.084 | 0.677 |
+
+NDCG@10 by clicks so far:
+
+| Clicks so far | Item-kNN | Two-tower | SASRec | GRU4Rec |
+|---|---:|---:|---:|---:|
+| 1 | 0.118 | 0.109 | **0.131** | 0.089 |
+| 2 | 0.123 | 0.095 | **0.130** | 0.085 |
+| 3–5 | 0.110 | 0.083 | **0.110** | 0.066 |
+| 6+ | 0.137 | 0.110 | **0.148** | 0.098 |
+
+- **SASRec beats item-kNN:** NDCG +0.008 (+0.004, +0.012), recall +0.012
+  (+0.007, +0.017), MRR +0.010 (+0.005, +0.016); and the frozen policy by NDCG
+  +0.012 (+0.008, +0.016). It is ahead or level in every clicks-so-far group.
+- **But it is less diverse:** ILD 0.555 against 0.628 (item-kNN) and 0.667
+  (frozen policy).
+- **GRU4Rec** is below item-kNN (NDCG −0.037) but was still improving when
+  training stopped; a longer run is needed before judging it.
+- **Caveats:** the epoch was chosen on 3,000 of the 20,000 evaluation cases
+  (as for the two-tower), so validation numbers are slightly optimistic; the
+  selection week is the clean check. Only one hyperparameter setting was run.
+
+**Reading.** Correctly trained, the transformer model is the most accurate
+home-page method on validation, while item-kNN with fixed alpha stays the most
+diverse.
+
+**Decision (user, 2026-11-08): keep item-kNN + fixed alpha 0.8 on the home
+page for now.** SASRec is reported as the most accurate home-page model on
+validation. Next step for it: train on more data than April alone and test
+whether its advantage grows; any later switch must be frozen on validation
+before SASRec is run on the selection week.
+
+**More data and a tuning grid (prepared 2026-11-08, not yet run).** Training
+history available before May (eligible sessions, distinct clicks):
+
+| Training window | Sessions | Sessions with ≥ 2 clicks | Training positions | Products |
+|---|---:|---:|---:|---:|
+| April (runs above) | 93,231 | 42,299 | 128,825 | 40,683 |
+| March–April | 159,813 | 72,812 | 223,520 | 52,286 |
+| February–April | 207,181 | 94,406 | 291,928 | 58,806 |
+| January–April | 209,144 | 94,676 | 292,304 | 58,908 |
+
+January adds almost nothing, so February–April is the full history (2.3× the
+April training positions). The sequence models now take a `training_window`
+setting, checked to end before 2016-04-30, and
+`config/sequence_models_feb_apr.json` uses February–April. One run of both
+models would take about 25–30 minutes on the laptop (the April 20-epoch run
+took 15.5). At the user's request, a 12-setting tuning grid is packaged for a
+compute cluster in `scripts/cluster/` (job array, one setting per task, CPU
+only): SASRec embedding 64/128 × 1/2 blocks × dropout 0.2/0.5 (30 epochs) and
+GRU4Rec embedding 64/128 × learning rate 0.001/0.003 (60 epochs). Steps are in
+`scripts/cluster/CLUSTER_GUIDE.md`; `collect_sequence_grid.py` ranks the
+settings by validation NDCG with intervals against item-kNN and the frozen
+policy. `.gitattributes` keeps the job scripts on Unix line endings.
+
+**Cluster environment (user choice, 2026-11-08): Miniconda + pip.**
+`requirements.txt` pins the versions the experiments ran with (Python 3.11,
+numpy 1.26.4, pandas 2.3.3, pyarrow 14.0.2, scipy 1.12.0, LightGBM 4.7.0, CPU
+torch 2.5.1). The older `requirements.lock.txt` pins different, untested
+versions and should not be used. The job scripts activate the conda
+environment `cp4285`.
+
+**Transformers4Rec (requested 2026-11-08; built, not yet run).** Findings from
+its PyPI packages: latest release 23.12.0 (January 2024, none since); it requires
+Hugging Face `transformers` < 4.31 and `merlin-models`; `merlin-core` 23.8.0
+requires pandas < 1.6, dask, dask-cuda, numba and tensorflow-metadata, and
+`merlin-dataloader` lists Python 3.8–3.10. It therefore cannot share the main
+environment (pandas 2.3, Python 3.11). **User decision: a separate conda
+environment** (`cp4285-t4r`, Python 3.10, `scripts/t4rec/requirements-t4rec.txt`).
+
+It connects through files, so no project code runs in the old environment:
+`main.py export-sequences` (`external_models.py`) writes the training sessions,
+the exact home-page cases (checked against the saved home-page run) and the
+product vocabulary; `scripts/t4rec/train_t4rec.py` trains the library's
+documented XLNet next-item setup (causal masking, tied embeddings; best epoch by
+recall@10 on the same 3,000 check cases as the other neural models) and writes
+ranked predictions per case; `main.py score-external` scores them with the same
+metrics and compares them with every saved home-page method (and SASRec/GRU4Rec
+runs listed in `config/t4rec.json`) with session-bootstrap intervals. The export
+and scoring steps are tested; the training script has only its helper functions
+tested, because the library cannot be installed on the laptop, so it has a
+`--smoke` mode for a first check on the cluster. `scripts/t4rec/t4rec.slurm` runs
+all three steps; `scripts/t4rec/T4REC_GUIDE.md` has the instructions.
+
+**GPU jobs (2026-11-08).** At the user's request, two Slurm scripts use the NUS
+`gpu` partition header (`--gpus=h100-96:1`): `scripts/cluster/sequence_grid_gpu.sh`
+runs the 12 grid settings one after another on one GPU (skipping finished ones),
+and `scripts/t4rec/t4rec_gpu.sh` runs the three Transformers4Rec steps. Both stop
+early if PyTorch cannot see the GPU. Any GPU type suffices (the models need
+well under 2 GB of GPU memory). The sequence models now train on the GPU when
+one is visible (`device`: `auto`, `cpu`, `cuda`) and save CPU-loadable weights;
+only the CPU path is tested here. The CUDA builds of torch are a one-time
+replacement described in the guides. The guides also record the first install
+problems on the cluster: Python 3.11 was only available from `conda-forge`, the
+home-directory disk quota was exceeded, and a batch job that did not activate
+the environment ran pip in the `base` environment (Python 3.13). The first GPU grid job (an
+A100 80 GB, MIG slice of 40 GB; `torch 2.5.1+cu124` saw the GPU and the input
+check passed) then failed on every setting with `No module named
+'session_rerank'`: pip installs only the libraries, not the project in `src/`.
+`main.py` and `tests/conftest.py` now add `src/` to the search path themselves
+(checked by running `main.py` from a copy with the installed package hidden). The
+second GPU job reached training on `cuda` and then failed in SASRec: its
+position indices and causal mask were created on the CPU while the model was
+on the GPU. Both are now created on the input's device; a test checks that every
+tensor the model code creates names its device (it fails on the old code). The
+CPU tests cannot run the GPU path itself, so the next cluster run is the check.
+The third GPU job ran correctly (`device: cuda`; first setting's check recall
+peaked at 0.171 against 0.158 for the April-only SASRec; SASRec with 2 blocks
+and dropout 0.5 reached 0.180). Run one after another, each setting took about
+14.5 minutes, mostly CPU work (per-epoch check of 3,000 cases, scoring 20,000
+cases, re-reading the raw CSV), so the 12 settings needed about 3 hours. With
+only one GPU available, `sequence_grid_gpu.sh` now runs four settings at a time
+on that GPU (16 CPU cores, 4 threads each), with one log per setting; the grid
+itself is unchanged.
+The re-submitted job (1097527) ran the older one-at-a-time script: it skipped the
+4 finished settings and trained the 4 dim-128 SASRec settings in about an hour.
+Check recall@10 so far:
+- dropout 0.5 clearly beats 0.2: with 0.2, recall peaks at epoch 3 (0.161-0.162
+  at dim 128) and then falls while the loss keeps dropping, i.e. overfitting;
+- dim 128 does not beat dim 64 (best: dim 64, 2 blocks, dropout 0.5, at least
+  0.180; dim 128, 2 blocks, dropout 0.5: 0.176).
+A second GPU became available, so the script gained `ONLY` (run only settings
+whose name contains a word). In the end it was not needed. Three GRU4Rec
+settings had already finished in the earlier job that failed on SASRec (run
+folders 13:48–14:19 UTC). Job 1097527 trained the last GRU4Rec setting itself,
+so the `ONLY` job was never submitted.
+
+**Grid results (validation week, 20,000 home-page cases, 2026-11-09).** All 12
+settings finished. Results were copied to `results/sequence_grid/`
+(`grid_summary.csv`). Re-running the collector locally gives an identical
+table.
+
+| Setting | Best epoch | Recall@10 | MRR@10 | NDCG@10 | NDCG vs frozen item-kNN + fixed 0.8 (95% CI) | Combined ILD |
+|---|---:|---:|---:|---:|---|---:|
+| **SASRec dim 64, 2 blocks, dropout 0.5** | 9 | **0.185** | **0.169** | **0.138** | **+0.021 (+0.016, +0.026)** | 0.513 |
+| SASRec dim 64, 1 block, dropout 0.5 | 12 | 0.182 | 0.166 | 0.136 | +0.018 (+0.014, +0.022) | 0.515 |
+| SASRec dim 128, 1 block, dropout 0.5 | 5 | 0.178 | 0.164 | 0.134 | +0.017 (+0.013, +0.021) | 0.519 |
+| SASRec dim 128, 2 blocks, dropout 0.5 | 30 (still improving) | 0.181 | 0.164 | 0.134 | +0.016 (+0.012, +0.021) | 0.542 |
+| SASRec dim 64, 1 block, dropout 0.2 | 5 | 0.175 | 0.160 | 0.131 | +0.013 | 0.524 |
+| SASRec dim 64, 2 blocks, dropout 0.2 | 5 | 0.175 | 0.159 | 0.130 | +0.013 | 0.523 |
+| GRU4Rec dim 64, lr 0.001 | 30 | 0.169 | 0.155 | 0.127 | +0.010 | 0.551 |
+| SASRec dim 128, 1 block, dropout 0.2 | 3 | 0.168 | 0.157 | 0.127 | +0.010 | 0.522 |
+| SASRec dim 128, 2 blocks, dropout 0.2 | 3 | 0.167 | 0.156 | 0.126 | +0.009 | 0.524 |
+| GRU4Rec dim 64, lr 0.003 | 8 | 0.162 | 0.151 | 0.122 | +0.004 | 0.545 |
+| GRU4Rec dim 128, lr 0.001 | 22 | 0.159 | 0.147 | 0.119 | +0.002 | 0.585 |
+| GRU4Rec dim 128, lr 0.003 | 5 | 0.157 | 0.149 | 0.119 | +0.002 | 0.566 |
+| *item-kNN (April co-clicks)* | – | 0.157 | 0.149 | 0.121 | +0.004 | 0.628 |
+| *item-kNN + fixed 0.8 (frozen home page)* | – | 0.151 | 0.147 | 0.117 | 0 | 0.667 |
+| *SASRec, April only (§6j)* | – | – | – | 0.129 | – | – |
+
+Reading:
+- **Dropout is the lever.** All four dropout-0.5 SASRec settings rank above all
+  four dropout-0.2 ones. With 0.2, the best epoch is 3–5, followed by
+  overfitting. This matches the SASRec paper's use of 0.5 on sparse data.
+- **Larger is not better.** Dim 128 does not beat dim 64. The top two settings
+  differ by only 0.002 NDCG, so the exact choice matters little.
+- **GRU4Rec is weaker.** Its best is 0.127; the lower learning rate is better
+  at dim 64 (0.127 vs 0.122). Every GRU4Rec setting falls below every
+  dropout-0.5 SASRec setting.
+- **More data helps.** The best SASRec on February–April (0.138) beats
+  April-only SASRec (0.129). It also beats item-kNN by +0.017 (+0.012, +0.022)
+  and the frozen home-page policy by +0.021, about +18%.
+- **The best SASRec wins in every history segment** (NDCG):
+
+  | Clicks so far | 1 | 2 | 3–5 | 6+ |
+  |---|---:|---:|---:|---:|
+  | SASRec | 0.143 | 0.135 | 0.121 | 0.154 |
+  | Frozen item-kNN + fixed 0.8 | 0.112 | 0.119 | 0.108 | 0.134 |
+
+- **It is much less diverse.**
+
+  | | SASRec | Frozen item-kNN + fixed 0.8 |
+  |---|---:|---:|
+  | Combined ILD | 0.513 | 0.667 |
+  | Category ILD | 0.106 | 0.388 |
+  | Distinct categories in 10 | 1.5 | 2.9 |
+  | Products outside the last click's category | 10% | 35% |
+
+  SASRec mostly recommends more of the same category. The brief asks the home
+  page for personalisation plus diversity.
+- 1.8% of cases have no click in SASRec's vocabulary (popularity fallback);
+  96.2% have a later click it can predict.
+- **Caveats.**
+  - The setting and its epoch were both chosen on validation data. The
+    margin needs the selection week before it can be trusted.
+  - SASRec saw February–April, while item-kNN's co-clicks are April only.
+    Part of the gap may be data, not model.
+
+**SASRec + diversity (validation, 2026-11-09; the user chose to test it).**
+`sequence_models.py` gained three options:
+- `diversity`: the home page's fixed-alpha and 6 + 4 reorderings of each
+  model's top `pool_size` (20) products, the same code path as for item-kNN.
+  `greedy_rerank` min-max scales relevance, so alpha 0.8 means the same on
+  SASRec scores as on item-kNN scores.
+- `reuse_run`: score saved models without training (validation only).
+- `frozen_policy` / `frozen_reason`: written to `frozen_choices.json` before
+  the selection week opens.
+
+Runs also save the shown lists (`lists.parquet`) for exposure measurement.
+Tests: the variants exist, a reused model reproduces its original per-case
+NDCG and ILD, and invalid policies or a `reuse_run` on the selection week are
+rejected. Full suite: 207 passed, plus the 2 known failures.
+
+Run: `config/sequence_home_diversity.json` reuses the best grid model (dim 64,
+2 blocks, dropout 0.5, epoch 9) on CPU. Output:
+`results/sequence_models/20261108T175008Z_validation`. SASRec's NDCG equals the
+cluster run (0.1379).
+
+| Method | Recall@10 | MRR@10 | NDCG@10 | NDCG vs SASRec | Combined ILD | Category ILD | Categories in 10 | Outside last click's category |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| SASRec (relevance only) | 0.185 | 0.169 | 0.1379 | – | 0.513 | 0.106 | 1.54 | 10.0% |
+| SASRec + fixed 0.8 | 0.183 | 0.169 | 0.1366 | −1.0% | 0.525 | 0.126 | 1.66 | 11.1% |
+| **SASRec + 6 + 4** | 0.173 | 0.168 | **0.1329** | **−3.6%** | **0.554** | 0.168 | 1.92 | 13.2% |
+| item-kNN + fixed 0.8 (frozen) | 0.151 | 0.147 | 0.1173 | −15.0% | 0.667 | 0.388 | 2.95 | 34.6% |
+
+NDCG by clicks so far:
+
+| Clicks so far | 1 | 2 | 3–5 | 6+ |
+|---|---:|---:|---:|---:|
+| SASRec + 6 + 4 | 0.137 | 0.130 | 0.117 | 0.148 |
+| item-kNN + fixed 0.8 (frozen) | 0.112 | 0.120 | 0.108 | 0.134 |
+
+- **Declared rule (most ILD within 5% NDCG loss) → SASRec + 6 + 4.** Both
+  reorderings stay within 5%, and 6 + 4 adds more variety (+0.041 ILD at −3.6%
+  NDCG). This also matches the original brief for the home page ("6 relevance
+  + 4"). On the item-kNN pages, 6 + 4 had cost more than 5%, so fixed 0.8 was
+  chosen there.
+- Against the frozen home-page policy, SASRec + 6 + 4 gains +0.016 NDCG (95% CI
+  +0.011 to +0.021) and wins in every history segment. It is still less diverse
+  (ILD 0.554 vs 0.667; 1.9 vs 2.9 categories). SASRec's top 20 is mostly one
+  category, so reordering within it has limited room. A larger pool was not
+  tested.
+- **Frozen 2026-11-09 (user decision): the home page uses SASRec + 6 + 4.**
+  Model: `results/sequence_models/20261108T175008Z_validation/sasrec.pt`.
+  See §7.
+
+**Selection week (May 9–14, 20,000 home-page cases, opened once,
+2026-11-09).**
+- Config: `config/sequence_home_selection.json`.
+- Run: `results/sequence_models/20261108T182139Z_selection`.
+- `frozen_choices.json` (policy `six_four_sasrec`, with its reason) was written
+  before the week was read. Code: commit e61f0ed plus the uncommitted
+  diversity changes of this entry, which are committed with this log.
+
+| Method | Recall@10 | MRR@10 | NDCG@10 | Combined ILD | Categories in 10 |
+|---|---:|---:|---:|---:|---:|
+| SASRec (relevance only) | 0.178 | 0.152 | 0.1217 | 0.517 | 1.59 |
+| SASRec + fixed 0.8 | 0.177 | 0.151 | 0.1207 | 0.529 | 1.71 |
+| **SASRec + 6 + 4 (frozen)** | 0.168 | 0.151 | **0.1177** | **0.560** | 2.00 |
+| item-kNN + fixed 0.8 (previous home page) | 0.146 | 0.130 | 0.1015 | 0.680 | 3.09 |
+| item-kNN | 0.151 | 0.133 | 0.1048 | 0.640 | 2.61 |
+| two-tower | 0.138 | 0.116 | 0.0920 | 0.442 | 1.06 |
+
+- **The validation result holds.**
+
+  | SASRec + 6 + 4 vs | NDCG (95% CI) | Recall (95% CI) | MRR (95% CI) |
+  |---|---|---|---|
+  | previous home page | +0.016 (+0.012, +0.020), +16% | +0.022 (+0.017, +0.027) | +0.021 (+0.015, +0.027) |
+  | item-kNN | +0.013 (+0.009, +0.017) | | |
+
+- The cost of 6 + 4 is about the same as on validation: −3.3% NDCG against
+  relevance-only SASRec (validation −3.6%), for +0.043 ILD.
+- It wins in every history segment (NDCG):
+
+  | Clicks so far | 1 | 2 | 3–5 | 6+ |
+  |---|---:|---:|---:|---:|
+  | SASRec + 6 + 4 | 0.136 | 0.129 | 0.111 | 0.093 |
+  | previous home page | 0.114 | 0.108 | 0.104 | 0.077 |
+
+- It is still less diverse than the previous home page: ILD −0.120 (−0.124,
+  −0.116); 2.0 vs 3.1 categories.
+- 2.6% of cases have no click in SASRec's vocabulary and get the popularity
+  fallback. 95.6% have a later click the model can predict.
+
+All three pages are now frozen and confirmed on the selection week:
+- category pages: LightGBM purchase_session;
+- item page: item-kNN + fixed 0.8;
+- home page: SASRec + 6 + 4.
+
+Confirmation can be opened once for all three.
+
+## 6k. Exposure and popularity bias (ethics, selection data, 2026-11-09)
+
+**Question.** Which products get shown, and how concentrated is exposure on
+popular products, for every evaluated method on all three pages?
+
+**Method** (`uv run main.py exposure`, `config/exposure.json`,
+`src/session_rerank/exposure.py`, `tests/test_exposure.py`).
+- Rebuild the selection-week top-10 lists of every method:
+  - home page: 20,000 cases
+  - item page: 20,000 pages
+  - category pages: 966 queries, using the saved LightGBM boosters and the
+    selection features rebuilt
+- Each rebuilt list's NDCG must equal the saved value (category pages: per-query
+  click NDCG of every method; candidates equal the saved table). **All three
+  pages passed.** To share code, `home_page.case_lists`/`load_frozen_model`
+  and `ymal.YmalData`/`page_lists` were factored out of the evaluation loops;
+  their tests still pass.
+- Popularity is April clicks. The **head** is the most-clicked products holding
+  50% of April clicks: 3,761 products (2% of 184,047). The tail is 41,754
+  other clicked products. **138,532 products (75%) had no April click.**
+- Every slot counts once. Coverage and Gini are measured over the whole catalog
+  (home, item) or over the products the site listed (category pages, 36,036).
+- Reference: the products shoppers clicked next (home and item pages: later
+  clicks; category pages: clicked listed products).
+
+**Results** (`results/exposure/20261108T160349Z/summary.csv`):
+
+| Page | Method | Distinct shown | Coverage | Gini | Head share | Tail | No-click | Head ratio to shoppers |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| Home | popularity | 12 | 0.000 | 1.000 | 1.000 | 0 | 0 | 3.32 |
+| Home | trending | 13 | 0.000 | 1.000 | 1.000 | 0 | 0 | 3.32 |
+| Home | item_knn | 27,461 | 0.149 | 0.938 | 0.324 | 0.676 | 0 | 1.07 |
+| Home | **fixed_0.8_item_knn (frozen)** | 27,431 | 0.149 | 0.937 | 0.313 | 0.687 | 0 | 1.04 |
+| Home | six_four_item_knn | 27,653 | 0.150 | 0.937 | 0.305 | 0.695 | 0 | 1.01 |
+| Home | two_tower | 27,670 | 0.150 | 0.949 | 0.391 | 0.484 | 0.125 | 1.30 |
+| Home | shopper clicks | 14,095 | 0.077 | 0.964 | 0.301 | 0.557 | 0.141 | 1.00 |
+| Item | category_popularity | 8,012 | 0.044 | 0.989 | 0.728 | 0.264 | 0.008 | 2.42 |
+| Item | relevance_20 | 32,070 | 0.174 | 0.920 | 0.302 | 0.695 | 0.003 | 1.00 |
+| Item | **fixed_0.8_20 (frozen)** | 32,296 | 0.175 | 0.918 | 0.289 | 0.708 | 0.004 | 0.96 |
+| Item | six_four_20 | 31,997 | 0.174 | 0.919 | 0.282 | 0.715 | 0.003 | 0.94 |
+| Category | site_order | 2,818 | 0.078 | 0.963 | 0.249 | 0.504 | 0.247 | 0.62 |
+| Category | popularity_sort | 2,796 | 0.078 | 0.964 | 0.722 | 0.270 | 0.008 | 1.80 |
+| Category | item_knn | 3,961 | 0.110 | 0.941 | 0.627 | 0.365 | 0.008 | 1.57 |
+| Category | **lightgbm_purchase_session (frozen)** | 3,349 | 0.093 | 0.954 | 0.681 | 0.298 | 0.021 | 1.70 |
+| Category | shopper clicks | 1,357 | 0.038 | 0.967 | 0.400 | 0.491 | 0.109 | 1.00 |
+
+**Reading.**
+- Cold-start popularity is the most concentrated: 12 products for every home
+  visitor.
+- The frozen item-kNN lists on the home and item pages match shoppers' own head
+  share (ratio 0.96–1.04) and show about twice as many distinct products as
+  shoppers clicked.
+- Fixed 0.8 and 6 + 4 lower the head share by only 1–2 points. They diversify
+  within a list, not across the catalog.
+- Item-kNN cannot show products without April clicks, though 14% of shoppers'
+  next clicks went to such products. The two-tower is the only method that
+  shows them (12.5% of slots), but it leans more on the head (ratio 1.30).
+- Category pages trade accuracy for exposure:
+  - the site's order is the most long-tail (25% head, 25% no-click) and the
+    least accurate (NDCG 0.065);
+  - the frozen LightGBM ranker (NDCG 0.203) puts 68% of slots on the 2% head,
+    1.7 times shoppers' share, and only 2.1% on no-click products.
+- Gini is near 1 for every method because the catalog is large, so coverage and
+  head share are the measures to report.
+
+**Update 2026-11-09: new home page.** After the switch to SASRec + 6 + 4 (§6j,
+§7), the exposure run was repeated with the SASRec selection run added
+(`home_sequence_run`; its saved lists reproduce its saved NDCG).
+Output: `results/exposure/20261108T184420Z`. Every earlier row is identical.
+
+| Home-page method | Distinct shown | Coverage | Head share | Tail | No-click | Head ratio to shoppers |
+|---|---:|---:|---:|---:|---:|---:|
+| SASRec | 26,199 | 0.142 | 0.397 | 0.549 | 0.054 | 1.32 |
+| SASRec + fixed 0.8 | 26,306 | 0.143 | 0.397 | 0.549 | 0.054 | 1.32 |
+| **SASRec + 6 + 4 (frozen)** | 26,652 | 0.145 | 0.391 | 0.553 | 0.056 | 1.30 |
+| item-kNN + fixed 0.8 (previous) | 27,431 | 0.149 | 0.313 | 0.687 | 0 | 1.04 |
+
+- The more accurate home page is also more concentrated on popular products:
+  39% of slots go to the head, against 31%.
+- It reaches some products with no April clicks (5.6% of slots), learned from
+  February and March sessions.
+- 6 + 4 barely changes exposure.
+
+The written section is `ETHICS.md`. It also covers stakeholders, feedback loops,
+training-data biases (position, click-only sessions, never-shown products),
+privacy of the demo website's logging, transparency, AI-generated demo names
+and limitations. Mitigations proposed there (exploration slots on category
+pages, capping popularity features, filling item-kNN pools by content) are
+not evaluated.
+
+Also: pytest's default temporary folder is blocked in this environment, so
+tests now run with `--basetemp` in the session scratchpad. Full suite: **203
+passed**, 2 known long-path failures.
+
+## 6l. Confirmation: the final test (May 16 – June 1, 2026-11-09)
+
+**Decision (user, 2026-11-09).** The confirmation week is the whole period
+May 16 – June 1. It is opened once, after all three pages are frozen.
+
+**Code.**
+- `src/session_rerank/windows.py`: the three weeks, and a rule that each page
+  scores the confirmation week only once. A run that stopped before writing
+  its results does not count as opened.
+- The pages accept the confirmation week only with a frozen choice:
+  - `ymal`, `home_page` and `sequence_models` need a frozen policy;
+  - `heldout` needs `frozen_selection_run`, reports the model chosen on
+    selection, and does not apply the selection rule again.
+- `uv run main.py confirmation` (`src/session_rerank/confirmation.py`,
+  `config/confirmation.json` and four page configs `*_confirmation.json`):
+  1. checks every page config;
+  2. writes `frozen_choices.json` with all three choices, the commit and the
+     uncommitted code (`code.diff`, including new files);
+  3. runs the pages;
+  4. writes `final_table.csv`.
+- Tests: `tests/test_confirmation.py` and an updated `tests/test_heldout.py`.
+  Full suite: 215 passed, plus the 2 known failures.
+
+**Run.** `results/confirmation/20261108T193024Z_confirmation`. The choices were
+frozen at 19:30:25 UTC.
+
+The first attempt stopped before scoring anything. The category-page check
+compared the rebuilt confirmation queries with the wrong reservation file: the
+pilot keeps them in `confirmation_ids.parquet`, not `queries.parquet`. All
+1,000 rebuilt IDs match that file. After the fix, the run resumed in the same
+folder with the same frozen choices, and the fixed code was recorded as
+`code_resumed_20261108T193305Z.diff`. Each page was scored once:
+
+| Page | Run | Size |
+|---|---|---|
+| Category pages | `results/heldout/20261108T193305Z_confirmation` | 1,000 queries (939 category pages with a later click) |
+| Item page | `results/ymal/20261108T193505Z_confirmation` | 20,000 of 72,798 evaluable item pages |
+| Home page cases | `results/home_page/20261108T194937Z_confirmation` | 20,000 of 72,798 evaluable cases |
+| Home page SASRec | `results/sequence_models/20261108T200822Z_confirmation` | same cases |
+
+**Final results** (95% session-bootstrap intervals):
+
+| Page | Frozen choice | NDCG@10 | Baseline | Difference (95% CI) | Other metrics |
+|---|---|---:|---|---|---|
+| Category pages | LightGBM purchase_session | **0.184** | popularity sort 0.167 | **+0.018 (+0.005, +0.032)** | Recall@10 +0.023 (+0.005, +0.042); MRR +0.019 (+0.004, +0.033) |
+| | | | item-kNN 0.162 | +0.023 (+0.010, +0.037) | site order 0.058 |
+| Item page | item-kNN + fixed 0.8, K1 = 20 | **0.095** | category popularity 0.093 | +0.003 (−0.001, +0.006): **tie** | MRR +0.008 (+0.003, +0.013); recall −0.002 (−0.006, +0.003); ILD **+0.176** |
+| | | | item-kNN relevance only 0.099 | −0.003 (−3.3%) | ILD +0.032 |
+| Home page | SASRec + 6 + 4 | **0.111** | item-kNN + fixed 0.8 0.098 | **+0.014 (+0.010, +0.017)**, +14% | Recall +0.020; MRR +0.017; ILD −0.109 |
+| | | | item-kNN 0.101 | +0.010 (+0.007, +0.014) | |
+| | | | two-tower 0.090 | +0.021 (+0.017, +0.025) | popularity 0.003 |
+
+**Reading.**
+- **Category pages: confirmed.** The LightGBM ranker beats the popularity sort
+  and item-kNN, with intervals above zero. Its gain over popularity is smaller
+  than on selection (+0.018 vs +0.029). The purchase_session model again edged
+  out click_session (0.184 vs 0.182).
+- **Home page: confirmed.** SASRec + 6 + 4 beats every other method, by about
+  the same margin as on selection (+0.014 vs +0.016 over item-kNN + fixed
+  0.8). It wins in every history segment:
+
+  | Clicks so far | 1 | 2 | 3–5 | 6+ |
+  |---|---:|---:|---:|---:|
+  | SASRec + 6 + 4 | 0.121 | 0.117 | 0.110 | 0.096 |
+  | item-kNN + fixed 0.8 | 0.102 | 0.105 | 0.102 | 0.082 |
+
+  It is less diverse (ILD 0.564 vs 0.673; 2.0 vs 3.0 categories). 3.9% of cases
+  fall back to popularity, because no click is in SASRec's vocabulary.
+- **Item page: a tie on accuracy, a clear gain in variety.** The diverse
+  item-kNN list's NDCG lead over category popularity was always small:
+
+  | Week | NDCG lead (95% CI) |
+  |---|---|
+  | validation | +0.005 (+0.001, +0.010) |
+  | selection | +0.007 (+0.003, +0.010) |
+  | confirmation | +0.003 (−0.001, +0.006) |
+
+  On confirmation that lead is no longer distinguishable from zero. It still
+  ranks the first click higher (MRR +0.008, interval above zero) and is far
+  more varied (ILD 0.635 vs 0.458; 2.6 vs 1.0 categories). Relevance-only
+  item-kNN still beats category popularity (+0.006, +0.003 to +0.009). The
+  diversity step costs that margin, as the 5% rule allowed (−3.3% here,
+  −4.0% on validation).
+- Each page's diversity cost is about the same as on validation and selection.
+  The declared rules held up.
+- **Possible explanation (not tested):** the confirmation weeks run from 2 to 5
+  weeks after the April data that every model learned from. Gains that depend
+  on specific co-clicks (item-kNN) or popularity snapshots may fade with time.
+
+## 6m. Final report, audit and website hand-off (2026-11-09)
+
+The user asked for both remaining pieces overnight: the written report and the
+website hand-off, with continuous auditing.
+
+**Report (`REPORT.md`).** The structure follows common course-report guidance
+(problem statement and task definition first; data; methods with baselines;
+evaluation protocol; results; error analysis; ethics; limitations) and offline
+recommender-evaluation best practice:
+- the task is defined before the evaluation;
+- baselines are strong and compared on identical cases;
+- the split type is stated;
+- held-out results are reported with paired intervals.
+
+Figures come from `scripts/report/make_figures.py`, which reads the saved runs
+directly (`figures/fig1_sequence_grid.png`, `fig2_trade_off.png`,
+`fig3_final_test.png`, `fig4_exposure.png`). The figure for the grid is a dot
+plot rather than bars, because its axis does not start at zero.
+
+**Audit (`scripts/report/audit_report.py`).** It recomputes every checked
+number from the result files and raw data and looks for that exact text in
+the report. The checks cover:
+- the three-week table and the final-test table;
+- the variety-rule table;
+- the error-analysis tables and exposure numbers;
+- dataset counts, the abstract and the conclusion.
+
+Final state: **78 of 78 checks pass**. The `ETHICS.md` exposure table was
+checked the same way (14 of 14 rows match).
+
+The audit found these errors in the first draft. They are corrected in the
+report, and the same slips are corrected in this log (§6d, §6f, §6j, §6l):
+
+| Item | Was | Correct (from the result files) |
+|---|---|---|
+| LightGBM NDCG on selection | 0.204 | 0.203 (0.20346) |
+| LightGBM vs popularity on selection | +0.029 (+0.017, +0.043) | +0.029 (+0.016, +0.042) |
+| Item page vs category popularity on selection | upper bound +0.011 | +0.010 |
+| Home page vs item-kNN on confirmation | +0.011 | +0.010 |
+| Home page vs two-tower, MRR lower bound on confirmation | +0.026 | +0.025 |
+| SASRec + fixed 0.8 vs SASRec on validation | −0.9% | −1.0% |
+| Item page 6 + 4 (K1 = 20) vs relevance on validation | −5.9% | −5.8% (exactly −5.85%, on the rounding edge) |
+| Adaptive-policy gap range | −0.005 to +0.003 | −0.004 to +0.003 (shuffled controls excluded) |
+| SASRec training data | 94,406 sessions, 291,928 examples (data count) | 94,405 sessions, 285,562 examples (the model's own record: last 20 clicks) |
+| Daily sessions | 592,643 (all event files) | 591,018 with at least one query (the report's definition) |
+| Sessions that buy | 2.2% | about 2% of sessions with a query |
+| Category gain in the conclusion | about 10% | 11% |
+
+A read-through also removed wording the numbers did not support:
+- "SASRec + 6 + 4 beats every other method": SASRec without the diversity step
+  scores higher, 0.115.
+- "14% over the best classical method": the 14% is over the method it
+  replaced; against plain item-kNN the gain is 10%.
+- An untested explanation of why 6 + 4 costs less on the home page.
+- "SASRec covers cold products": replaced by the measured 5.6% of slots on
+  products without April clicks.
+
+**Website hand-off (`HANDOFF.md`).**
+- `uv run main.py handoff` (`handoff.py`, `config/handoff.json`) exports every
+  frozen model to `results/handoff/<stamp>/`:
+  - SASRec with its settings, vocabulary and fallbacks;
+  - the LightGBM booster with its frozen product inputs;
+  - "You may also like" for all 184,047 products.
+- It then verifies the export against the confirmation-week runs:
+  - home page: identical lists;
+  - item page: identical NDCG for every page;
+  - category pages: identical NDCG for every query.
+- `serving.py` serves the three pages with the evaluation's own functions.
+  The category ranker computes its 20 features live with `query_features`, the
+  same function used in training. It does not use the site's list order, so
+  the website can rank whole categories.
+- `api.py` (`uv run main.py serve --handoff …`) is a standard-library JSON API
+  with a `/log` call that keeps only whitelisted fields and records no IP
+  addresses (`ETHICS.md` §5).
+- Tests: `tests/test_serving.py` (8 tests: home cold start and SASRec + 6 + 4,
+  fallback, item lookup, category features against `query_features`, log
+  whitelist, end-to-end API, CLI). Full suite: 223 passed, plus the 2 known
+  failures.
+
+**Export and verification (`results/handoff/20261108T203934Z`, 27 MB).**
+- Passed all three checks against `results/confirmation/20261108T193024Z_confirmation`:
+  - home page: every 10th of the 20,000 cases, 2,000 of 2,000 served lists
+    identical to the saved SASRec + 6 + 4 lists;
+  - item page: 20,000 of 20,000 pages with identical NDCG (mean 0.0954);
+  - category pages: 952 of 952 category queries with identical NDCG (mean
+    0.1843, the final-test value).
+- The item-page export took about 20 minutes (184,047 products); the
+  verification took about a minute.
+
+A live run of the API on this export (scratch script, not committed):
+- loading takes about 6 s;
+- each call takes 3–35 ms, including the largest category (3,851 products);
+- `/log` dropped a non-whitelisted field.
+
+**Behaviour to know.** On a category page, a product the shopper already
+clicked moves to the top (e.g. product 9654 in category 1010 after one click):
+the frozen ranker learned that shoppers often click a product again
+(`session_item_clicks`). This is part of what was evaluated. `HANDOFF.md` tells
+the website team they may keep it or drop already-clicked products from the
+display.
+
+**Committed 2026-11-09** on `refactor/readable-main-pipeline` and pushed to
+`origin` (user request): the report, figures, audit and figure scripts, the
+hand-off/serving/API code with its tests, and the edits to `ETHICS.md`,
+`README.md`, `main.py` and this log. Left out: `figures/clew_showcase.gif`
+(4.4 MB, not made in this log's work and not referenced anywhere). The STePS
+page and poster files (§6n, §6o) live outside the repo and are not committed.
+
+---
+
+## 6n. STePS project page copy (2026-11-09)
+
+The organisers require a title, description and image on the project's UVENTS page
+by 9 Nov, 11:00 am. The page is
+https://uvents.nus.edu.sg/event/29th-steps/module/CP4285/project/2 (project ID
+**CP4285-2**, listed as T02; members Ho Chi Thanh, Nguyen Dinh Nam,
+R Arulkumaran). Another team's page in the module shows the available fields:
+- a short abstract, shown on the module list and over the banner;
+- a long description;
+- a 16:9 project image, stored by UVENTS at 960 × 540;
+- a poster link to a direct imgur image.
+
+Written for non-technical visitors, outside this repository in
+`C:\Users\namnd\Documents\Codex\CP4285_STEPS_2026\`:
+- `UVENTS_Page_Copy.md`: the title (Room to Discover: Recommending to
+  Strangers), the abstract, the description and a fact sheet tracing every
+  number to `REPORT.md` or the final-test `final_table.csv`. The page uses
+  final-test numbers, not the selection-week numbers in the older drafts in that
+  folder:
+  - category pages +11% (NDCG 0.184 vs 0.167);
+  - home page +14% (0.111 vs 0.098);
+  - one in three home lists hit a later click (hit rate 0.334);
+  - "You may also like": same NDCG as category popularity, 2.6 vs 1.0 categories.
+- `UVENTS_Project_Image.jpg`: a 1920 × 1080 banner, about 180 KB. It is drawn from
+  `uvents_banner.html` by `render_uvents_banner.cjs` (Playwright), which also writes a
+  preview at the size the page shows it.
+
+Nothing was submitted. The team uploads the image to imgur and pastes the text
+into UVENTS.
+
+**Revision (same day).** The team's own draft provided:
+- the title **Clew: Session-Based Product Discovery for Anonymous Shoppers**;
+- the dataset facts;
+- the three-stage pipeline: candidate selection, relevance ranking, diversity
+  reranking.
+
+The copy was rewritten on that structure. It keeps the story ("Why Clew?": the
+ball of thread behind the word "clue"), the final-test results, the finding that
+adaptive variety did not win, and the exposure and privacy notes. The banner now
+reads "Clew – Every click is a clue." Two claims were corrected:
+- Candidate selection with the two-tower model is described as tried, not used,
+  because the final system shortlists from the item-kNN and SASRec top 20.
+- "2.6× more categories" became "2.6× as many categories", since the result is
+  2.6 categories against 1.0.
+
+**Figures and full page (same day).** `UVENTS_Page.md` lays out the whole UVENTS
+page: title, abstract, banner, then the description with five figures placed in
+it, under `uvents_images/` at 1600 × 900. The figures are drawn from
+`uvents_figures.html` by `render_uvents_figures.cjs`.
+
+| Figure | Shows | Source |
+|---|---|---|
+| `1_buried_clicks` | Median clicked position 65–67; 57% of clicks below place 50 | REPORT §1.1 |
+| `2_three_questions` | The three-stage pipeline | REPORT §3 |
+| `3_three_pages` | Three pages and their models | REPORT §3.6 |
+| `4_results` | Final-test bars: category 0.167 vs 0.184; home 0.098 vs 0.111; item page 1.0 vs 2.6 categories | final_table.csv, REPORT §5.4 |
+| `5_who_gets_seen` | A grid of 2% / 23% / 75% of products by share of April clicks; category-page head share 25%, 40%, 68%, 72% | ETHICS.md §2, selection week |
+
+`UVENTS_Page_preview.png` is a full-page render of the Markdown file, used to
+check the layout.
+
+**Shorter, story-led version (same day, user feedback).** The user wanted:
+- no "Why Clew" mythology section;
+- an opening question as the hook;
+- less technical depth;
+- the flow of the HTML project page, with running shoes as the running example.
+
+What changed:
+- `UVENTS_Page.md` now flows: hook question → "A click is a clue" → how Clew
+  works → three pages → does it work → who gets seen → a closing question.
+- It is about 360 words, down from about 650.
+- The "adaptive variety did not win" section and the dataset section were
+  dropped.
+
+Figure changes:
+- Figure 2 is now `2_how_clew_works`: four steps (you click → shortlist → rank →
+  add variety), each with a few words and a small technical tag, and no
+  questions.
+- Figure 1 says "what people clicked", not "shoes", because the data covers all
+  products.
+- Figure 3 has a shorter title and shorter model captions.
+
+`UVENTS_Page_Copy.md` is now only the upload checklist and fact sheet.
+
+**One image only (same day).** UVENTS allows no images inside the description,
+only the single project image. The banner is that image.
+
+Changes to `UVENTS_Page.md`:
+- The description is now text only, about 395 words.
+- It restates in words what the figures carried: 57% of clicks were below
+  place 50; three in four products had no clicks; the category ranker gives
+  about two-thirds of its top places to the popular 2%.
+
+The five figures in `uvents_images/` are kept for the poster, slides or the booth.
+
+**Technical depth added back (same day, user request).** The page keeps the shoe
+story and now also names:
+- session-based recommendation, and the three stages (candidate selection,
+  relevance ranking, diversity reranking);
+- how variety is added: 6 + 4 over the top 20, and 80/20 maximal marginal
+  relevance, with distance by category and name, and the 5% cap declared before
+  testing;
+- the models: LightGBM learning-to-rank (20 signals, purchases weighted above
+  clicks), item-kNN collaborative filtering, the SASRec self-attention
+  transformer, and 12 SASRec and GRU4Rec settings tuned on a GPU cluster;
+- how it was tested: compared against popularity, two-tower and GRU4Rec; chosen
+  on one week, checked on a second, frozen and tested once; NDCG@10 with 95%
+  confidence intervals; the category and home intervals stay above zero.
+
+Length: abstract about 115 words, description about 615. Each new claim was
+checked against REPORT.md §1.3, §3.3–3.5 and §4.2 and added to the fact sheet in
+`UVENTS_Page_Copy.md`.
+
+**Organised by pipeline, not by page (same day, user request).**
+- "How Clew works" now walks through the three stages, with the methods inside
+  each:
+  - candidate selection: the shop's list, popularity, a two-tower model,
+    item-kNN;
+  - relevance ranking: LightGBM learning-to-rank, SASRec;
+  - diversity reranking: 6 + 4, and the 80/20 maximal marginal relevance balance.
+- The "Three pages" section is gone. Results are labelled by technique:
+  - learning-to-rank +11% over popularity;
+  - SASRec + 6 + 4 +14% over the co-click method it replaced;
+  - the 80/20 reranking has the same accuracy as a popularity list, with 2.6
+    categories against 1.
+- The abstract follows the same structure.
+- The banner stat captions now read "learning-to-rank vs. popularity", "SASRec
+  vs. previous method" and "categories per list, same accuracy".
+- The web demo is not mentioned anywhere: the team is not confident in it.
+
+## 6o. A1 poster "Clew" (2026-11-09)
+
+Built from the team's spec (hct): one A1 portrait slide, 594 × 841 mm, white
+background, Arial, teal for ranking results and coral for diversity. Files are
+in `C:\Users\namnd\Documents\Codex\CP4285_STEPS_2026\poster\`:
+- `Clew_A1_Poster.pptx`, `.pdf` and `_preview.png`;
+- `build_clew_poster.py` (python-pptx) builds the slide;
+- `render_poster.ps1` exports PDF and PNG through PowerPoint itself, so the fonts
+  are exact.
+
+Earlier poster files in that folder were left untouched.
+
+**Content.**
+- Header with the opening question, introduction and a vote QR code.
+- Left column: three data statistics from the April training pool (median one
+  click per session; 95% category browses; 90% of lists hold one category), the
+  evaluation timeline and the metric definitions.
+- Right column: three parallel paths (LightGBM; SASRec → top 20 → 6 + 4;
+  item-kNN → top 20 → fixed 0.8), notes on each model, and a box on the earlier
+  experiments.
+- Final test (native bar charts):
+  - category 0.184 vs 0.167, +0.018 [0.005, 0.032], 939 queries;
+  - session 0.111 vs 0.098, +0.014 [0.010, 0.017];
+  - related products 0.095 vs 0.093, +0.003 [−0.001, 0.006], marked "no clear
+    NDCG improvement".
+- Variety on the selection week, as dumbbell plots built from shapes, with
+  separate NDCG and ILD axes:
+  - SASRec 0.1217 → 0.1177 and 0.517 → 0.560;
+  - item-kNN 0.101 → 0.097 and 0.620 → 0.652.
+- Caption, limitations, the six sponsor logos, and "29th STePS · 11 November
+  2026". The supervisor is not named, and there is no AI-assistance line, as the
+  spec asked.
+
+**Checks.**
+- Every number traced to `final_table.csv`, the selection `summary.csv` files and
+  log §2, §3, §5, §6 and §6l. The sources are in the slide's speaker notes.
+- Logos: the six Platinum and Gold logos from the official sponsors page, in
+  their original colours, cropped of padding only, never stretched. The logo
+  says "Tealseed"; the spec wrote "Teals".
+- The QR code, decoded from the rendered PNG, gives
+  `https://uvents.nus.edu.sg/event/29th-steps/vote`. That page opens the CP4285
+  ballot.
+- PDF and slide are 594.0 × 841.0 mm.
+- Native elements: three charts and editable text boxes; pictures only for the
+  logos and the QR code.
+- About 484 words excluding citations.
+- Smallest text: 18 pt on chart labels and 16 pt on citations.
+- PowerPoint opened and exported the file without a repair prompt. The skill's
+  `validate.py` could not load its schema files on this machine, so it gave no
+  verdict.
+
+**Not verified.** The Canva import. The "twenty design patterns" image mentioned
+in the spec was not supplied; the skill's own list of patterns to avoid was used
+instead (no accent bars or edge stripes, no decorative rules).
+
+---
+
+## 6p. Review of hct's shopping demo and model export (2026-11-09)
+
+hct pushed `e269cd8` ("add shopping demo"): a local Clew website (`web/`,
+`src/session_rerank/demo.py`, `scripts/run_demo.py`), fictional display data
+for 6,764 products (`web/catalog/`, made by `scripts/prepare_demo_catalog.py`),
+input validation in `api.py`, `weights_only=True` when loading SASRec in
+`serving.py`, and `tests/test_demo.py`. The display catalog is pinned to the
+SHA-256 of hct's own export, `results/handoff/20261109T100233Z`, which is not
+in git; the user supplied it as a zip.
+
+**The zip.** Exactly the 12 export files, no code, no unsafe paths. Extracted
+to a scratch folder (not into `results/`).
+
+**Compared with our export (`20261108T203934Z`).**
+- Byte-identical: SASRec `model.pt`, LightGBM `model.txt`, the "You may also
+  like" table, vocabulary, fallback and popularity lists, catalog.
+- `home/settings.json`, `category/settings.json`: same content, Unix line
+  endings instead of Windows ones.
+- `category/product_stats.parquet`: `window_click_rate` differs in 27,033 of
+  184,047 rows by at most 2.4e-7 (float32 rounding from another machine).
+- Manifest: made from commit `2d35207` (our report commit); its checksums
+  match its files.
+
+**Independent re-verification** with `handoff.verify_*` against
+`results/confirmation/20261108T193024Z_confirmation`, stricter than the
+export's own check (every home case, not every 10th):
+
+| Check | Result |
+|---|---|
+| Home page (SASRec + 6 + 4) | 20,000 of 20,000 lists identical |
+| Item page | 20,000 of 20,000 pages identical NDCG (mean 0.0954) |
+| Category pages | 952 of 952 queries identical NDCG (mean 0.1843) |
+
+**The demo.** `bundle_issues` reports no issues and the catalog fingerprint
+matches the export. Run on hct's export, a walk-through (category 47 →
+product 12862 → related product 129045 → home) showed exactly the lists our
+own export returns for the same requests; the home page switched to SASRec +
+6 + 4 with discovery picks in places 7–10. `clew.js` displays API results in
+order without filtering. No horizontal scroll at 375 px. The 16 demo and
+serving tests pass on Windows.
+
+**Notes for the team.**
+- On Windows, `prepare_demo_catalog.py` crashes inside LightGBM ("access
+  violation") because it imports pandas before the model code (an OpenMP
+  clash between PyTorch and LightGBM). Importing `lightgbm` first fixes it.
+  Rebuilt from our export, the catalog is identical apart from the
+  fingerprint. The demo server itself is not affected.
+- Because the catalog is pinned to one export's fingerprint, the demo starts
+  only with hct's export, even though ours gives the same recommendations.
+- `web/README.md` uses `.venv/bin/python` (macOS/Linux); on Windows it is
+  `.venv\Scripts\python`.
+- Category pages in the demo rank whole categories; the reported experiment
+  ranked logged lists (the README says so).
+
+**A simulated visit** (user request; product names are fictional labels from
+a hash of the anonymous name tokens, so only categories are real):
+fresh home (popularity: 8 of 10 Electronics) → Kitchen appliances → product
+40965 → related 10607 → home: all 10 "For you" in Kitchen appliances → Clothing
+→ product 35311 → home: all 10 in Clothing; the two kitchen clicks no longer
+show. Related lists stayed in the clicked product's category (one exception,
+a product from a supporting category).
+
+**What this showed about 6 + 4 on the home page**, measured on the final
+test (`results/sequence_models/20261108T200822Z_confirmation/lists.parquet`,
+20,000 cases, categories from the export catalog):
+
+| Home policy | Categories per list | Lists with one category | Places 7–10 add a new category |
+|---|---|---|---|
+| SASRec | 1.64 | 77% | 18% |
+| **SASRec + 6 + 4 (frozen)** | 2.05 | 67% | 32% |
+| SASRec + fixed 0.8 | 1.75 | 73% | 21% |
+
+The four discovery places usually differ by product name, not by category.
+The STePS banner and page text ("six shoes like yours plus four to discover,
+such as a sports bag or a cap") overstate this for the home page. The "2.6
+categories per list" figure is for related products and is correct as stated.
+
+**Why: the model, not the display catalog.** The catalog only supplies names,
+prices and pictures; it does not change which products are recommended. On
+the home page SASRec scores all 58,804 products in its vocabulary (of
+184,047), keeps its top 20, and 6 + 4 chooses from those 20. For mixed visits
+SASRec's top 20 (and nearly all of its top 100) is the latest clicked
+category; the earlier interest first appears at place 220 (kettle, coffee
+maker, jacket), 157 (electronics, then clothing) or 664 (clothing, then
+electronics).
+
+**Real shoppers behave this way too** (April, the training month, 43,244
+sessions with 2+ distinct clicks; 26% span 2+ categories). For the 29,371 next
+clicks made after a session already had 2+ categories: 71% stay in the latest
+category, 26% go to a new category, 3% return to an earlier one. SASRec
+follows the latest interest because the data rewards it; showing both
+interests would serve the 3% case. The 26% "new category" share is where the
+discovery places could help and mostly do not (32% of lists, above).
+
+No change made: the home policy stays as frozen and tested. Options put to
+the user: keep it and correct the STePS wording; or a demo-only variant (for
+example, discovery places drawn from a wider pool) that would have to be
+chosen on the validation week and labelled as not part of the final test.
+
+**Variant tested on the validation week (user request):
+`six_other_categories_sasrec`** (`scripts/analysis/home_other_categories.py`,
+`results/home_other_categories/20261109T140938Z_validation`). Places 1–6:
+SASRec's best six. Places 7–10: walking down SASRec's top 1,000, the best
+product of each category not among the first six's categories, one per
+category. Declared before the run: the 6 + 4 rule (at most 5% NDCG loss
+against plain SASRec; then most ILD). Same 20,000 cases and saved model as
+§6j; plain SASRec and 6 + 4 were recomputed and matched the saved run exactly.
+The final test was not used.
+
+| Home policy (validation week) | NDCG@10 | vs SASRec | Hit rate | Categories per list | ILD | Places 7–10 catch a later click | Same, when the shopper later clicks a category the six do not show (6,545 cases) |
+|---|---|---|---|---|---|---|---|
+| SASRec | 0.1379 | — | 0.379 | 1.54 | 0.513 | 16.2% | 12.6% |
+| SASRec + 6 + 4 (frozen) | 0.1329 | −3.6% | 0.364 | 1.92 | 0.554 | 13.8% | 11.4% |
+| 6 + 4 from other categories | 0.1125 | **−18.5%** | 0.297 | 5.29 | 0.828 | 0.6% | 1.7% |
+
+Against the frozen 6 + 4: NDCG −0.020 (−0.024, −0.018), hit rate −0.066
+(−0.071, −0.062), categories +3.37 (+3.34, +3.40).
+
+**Result: rejected by the declared rule** (−18.5%, limit −5%). The four places
+always show four new categories, but they almost never catch the shopper's
+next interest: even when the shopper does move to a category the first six do
+not show, SASRec's best product from another category is clicked later in 1.7%
+of cases, against 11.4% for the frozen four. Where a shopper goes next is not
+predictable from the session; variety across categories costs accuracy without
+buying discovery clicks in this data. The frozen home policy is unchanged.
+
+**Two-tower for the discovery places (user idea: the two-tower filters to
+related products, then the most diverse are taken)**
+(`scripts/analysis/home_two_tower_tail.py`,
+`results/home_two_tower_tail/20261109T142635Z_validation`; same cases, rule
+and reproduction check as above; the session two-tower of §6g, trained April).
+Places 1–6: SASRec's best six. Places 7–10: (a) the four most mutually
+different among the two-tower's top 20; (b) the two-tower's best product of
+each category the six do not show (its top 100; next best fill in).
+
+| Home policy (validation week) | NDCG@10 vs SASRec | Categories per list | Places 7–10 add a new category | Places 7–10 catch a later click | Same, in the 6,545 new-category cases |
+|---|---|---|---|---|---|
+| SASRec + 6 + 4 (frozen) | −3.6% | 1.92 | 30% | 13.8% | 11.4% |
+| (a) 6 + two-tower's 4 most different | −5.6% | 1.45 | 9% | 12.3% | 11.0% |
+| (b) 6 + two-tower's best per new category | −6.4% | 2.01 | 25% | 11.2% | 9.9% |
+
+Both fail the declared 5% rule, and neither beats the frozen 6 + 4 on variety
+or on discovery clicks. (a) is less varied than plain SASRec: the two-tower's
+top 20 is almost always the last clicked category (§6g: 99%). (b) finds a
+product from another category in its top 100 only for a quarter of lists.
+Its cross-category picks are clicked far more often than SASRec's best per
+other category (9.9% against 1.7% in new-category cases), but still less
+than the frozen four.
+
+**Wider pool for 6 + 4 (user idea: the four from SASRec's top 100)**
+(`scripts/analysis/home_wider_pool.py`,
+`results/home_wider_pool/20261109T143954Z_validation`; same cases, model and
+distance as the frozen 6 + 4; plain SASRec and the pool-20 version reproduce
+the saved run exactly). Reported under the declared 6 + 4 rule and under the
+user's split view (places 1–6 judged on relevance, places 7–10 on discovery):
+
+| Places 7–10 from SASRec's… | NDCG@10 vs SASRec | NDCG@6 | Categories per list | 7–10 add a new category | 7–10 catch a later click | Same, in the 6,545 new-category cases |
+|---|---|---|---|---|---|---|
+| (plain SASRec) | — | 0.120 | 1.54 | 16% | 16.2% | 12.6% |
+| top 20 (frozen) | −3.6% | 0.120 | 1.92 | 30% | 13.8% | 11.4% |
+| top 50 | −6.9% | 0.120 | 2.61 | 56% | 11.4% | 9.7% |
+| top 100 | −9.9% | 0.120 | 3.33 | 77% | 9.2% | 8.1% |
+| top 200 | −11.9% | 0.120 | 4.00 | 96% | 7.3% | 7.0% |
+
+Against the frozen pool of 20, pool 100: NDCG@10 −0.0086 (−0.0104, −0.0069),
+categories +1.41 (+1.38, +1.44), new category in 7–10 +47 points, later
+clicks in 7–10 in new-category cases −3.3 points (−4.0, −2.6).
+
+- **Under the declared 6 + 4 rule only the frozen pool of 20 passes**; the
+  frozen policy stands for the report and the tested result.
+- **Under the split view** places 1–6 are identical (NDCG@6 0.120) and the
+  pool size is a smooth dial for places 7–10: more categories, fewer later
+  clicks. Of every way of filling 7–10 tried today, a wider SASRec pool gives
+  the most cross-category variety for the clicks it keeps (pool 100: a new
+  category in 77% of lists while still catching a later click in 8.1% of
+  new-category cases; two-tower per category: 25% and 9.9%; SASRec best per
+  other category: 100% and 1.7%).
+- Five home variants were tried on the validation week today; any one adopted
+  must be checked on the selection week first. No change made to the frozen
+  export or the demo.
+
+**Selection-week check of pool 100 (user request; criteria written here
+before the run).** Only pool 100 against the frozen pool of 20, on the
+selection week's 20,000 cases (`results/sequence_models/20261108T182139Z_selection`,
+same frozen SASRec). Pool 100 is confirmed as the website's discovery setting
+(a design choice after the final test, not part of the tested result) if all
+three hold:
+1. places 1–6 are identical to the frozen policy's (NDCG@6 equal);
+2. places 7–10 add a category the six do not show in at least 70% of lists
+   (validation: 77%), with the difference to pool 20 above zero;
+3. in cases where the shopper later clicks a category the six do not show,
+   places 7–10 catch a later click in at least 7% (validation: 8.1%).
+NDCG@10 is reported alongside (validation: −9.9% against plain SASRec). The
+final test is not used.
+
+Result (`results/home_wider_pool/20261109T145008Z_selection`; plain SASRec and
+pool 20 reproduce the saved selection run exactly):
+
+| Selection week | NDCG@10 vs SASRec | NDCG@6 | Categories per list | 7–10 add a new category | 7–10 catch a later click | Same, in the 7,009 new-category cases |
+|---|---|---|---|---|---|---|
+| (plain SASRec) | — | 0.1039 | 1.59 | 17% | 14.1% | 8.2% |
+| pool 20 (frozen) | −3.3% | 0.1039 | 2.00 | 32% | 12.2% | 7.5% |
+| pool 100 | −9.3% | 0.1039 | 3.41 | 79% | 7.5% | **4.8%** |
+
+Pool 100 against pool 20: NDCG@10 −0.0073 (−0.0079, −0.0066); new category in
+7–10 +47 points (+46, +48); later clicks in 7–10 in new-category cases −2.7
+points (−3.3, −2.1).
+
+- Criterion 1 holds (NDCG@6 identical); criterion 2 holds (79%, difference
+  above zero); **criterion 3 fails (4.8% < 7%)**. **Pool 100 is not confirmed.**
+- The whole selection week has fewer such clicks (the frozen four: 7.5%
+  against 11.4% on validation), so the absolute 7% threshold was strict for
+  this week; relative to the frozen four, pool 100 keeps 64% of them here and
+  71% on validation. The criterion is kept as written: the check failed.
+- The frozen home page (pool 20) stays in the export and the demo. Pool 100
+  goes to the report as tested-and-not-confirmed further work: it buys a new
+  category in most lists at the cost of about a third of the discovery clicks.
+
+**User decision (2026-11-09): the website uses pool 100 anyway** ("4% is not
+bad"). This is a product choice made after the final test, against a failed
+pre-declared criterion; the report's tested home page remains SASRec + 6 + 4
+over the top 20, and all final-test numbers refer to it.
+- Implemented as a runtime option, not a new export: `Recommender(folder,
+  home_pool=100)`, `scripts/run_demo.py --home-pool 100`. The verified export
+  and its checksums are unchanged; the default is still the exported 20. With
+  another pool the home lists are labelled `six_four_sasrec_pool100`, so the
+  website's `/log` records tell the two apart; `/demo/status` reports the pool.
+- Checks: new test `test_home_pool_option_widens_only_the_discovery_places`
+  (places 1–2 of the toy model unchanged, lists equal to the analysis's
+  `diverse_tail_order` over the wider pool, invalid pools rejected); serving
+  and demo tests 17 passed. On real data, the served pool-100 home page gave
+  identical NDCG to the selection-week analysis on 2,000 of 2,000 checked
+  cases (every 10th).
+- Demo restarted on hct's export with `--home-pool 100`. Example: earbuds then
+  jacket now shows two discovery products from other categories.
+
+**Display-catalog gap found.** The demo's display data (`web/catalog/`)
+covers 6,764 products, 3% of SASRec's 58,804-product vocabulary. On every
+20th selection-week case, about 90% of home-page products had no display name,
+picture or price, with pool 20 (89%) and pool 100 (90%) alike; the demo shows
+them as "Product <id>, image unavailable". Walk-throughs that start from the
+four featured categories hide this. Extending the catalog (every product the
+home page, related products and category links can reach) is a change to
+hct's catalog script and data; not done yet.
+
+---
+
+## 6q. Display catalog for every product (2026-11-09)
+
+The §6p gap is closed: every product in the export catalog
+(`results/handoff/20261109T100233Z/catalog.parquet`, 184,047 products) now
+shows a fictional name, picture and price in the Clew demo, and every
+categorized product's category has a theme. The 6,764 stored records are
+byte-for-byte unchanged (`web/catalog/products.json` has no diff); the rest
+are computed on request instead of being stored, so no large data file is
+added.
+
+**What changed.** `scripts/prepare_demo_catalog.py` now takes the export
+folder from a `--handoff` argument (default `results/handoff/20261109T100233Z`,
+previously hard-coded), imports `lightgbm` before `pandas`/`torch` (Windows
+OpenMP clash, §6p), and writes `categories.json` with a `theme` (0–3) for
+every one of the export's 1,217 categories: the 155 existing entries are kept
+exactly, with their theme added (featured = their THEMES row, supporting = the
+theme their name already states), and 1,062 new entries
+`{"name": "<Theme> collection <id>", "featured": false, "theme": ...}` are
+appended. `products.json` and `coverage.json` are unchanged apart from a new
+`all_products` key in `coverage.json`. `asset-sources.json` is unchanged.
+`src/session_rerank/demo.py` gained `display_record(item_id, category_id,
+name_tokens, theme)` — the same formula as before (type = first byte of the
+SHA-256 of the sorted unique name tokens, mod 4; name, SGD price and picture
+from TYPES; picture = theme * 4 + type) — now the single source of the
+formula, used by the script too. At startup the demo reads the raw
+`name_tokens` strings from the export catalog once and checks every stored
+record in `products.json` against `display_record`, failing if any differ
+(the shipped catalog passes). `/demo/products` returns the stored record if
+the product has one, otherwise the computed record for its category's theme,
+otherwise `{item_id, category_id}` as before. Products without a category
+would still show only "Product <id>"; this export has none.
+
+**How themes are assigned** (categories not among the 155): for each such
+category, count the themes of the related products (from
+`item/you_may_also_like.parquet`, one row per product with −1 padding) whose
+category already has a theme; the most frequent theme wins, ties to the lower
+theme number; repeat over the still-unthemed categories until none new gets a
+theme; anything left gets `category_id % 4`.
+
+**Counts** (`coverage.json` → `all_products`):
+products with display data 184,047; products without (no category) 0;
+categories themed by links 1,039; categories themed by category_id % 4 23.
+
+**Tests** (`uv run python -m pytest tests/test_demo.py tests/test_serving.py
+-q --basetemp C:\Users\namnd\AppData\Local\Temp\pytest_clew`):
+`21 passed, 14 warnings in 7.17s` (17 before, 4 new: display_record
+reproduces three hand-picked stored records; an unstored product in a themed
+category gets a full record; a product without a theme returns only
+{item_id, category_id}; the startup check rejects a changed stored record).
+
+**Acceptance checks.**
+1. `git diff --stat web/catalog/products.json web/catalog/coverage.json` →
+   `web/catalog/coverage.json | 6 ++++++` only (products.json: no diff;
+   coverage.json: only the `all_products` key added). *(Corrected in review:
+   the first version of this entry quoted `8 +++++++-`, which the command
+   does not print.)*
+2. `uv run python scripts/run_demo.py --handoff results/handoff/20261109T100233Z
+   --home-pool 100 --port 8000` printed `Home page: 6 + 4 over SASRec's top
+   100` and started without errors.
+3. 2,000-product samples, `missing` = products without display data:
+   `SASRec vocabulary missing: 0 of 2000`; `catalog with category missing:
+   0 of 2000`; `related products missing: 0 of 2000`.
+4. `POST /recommend/home` with clicks 12862 then 35311 returned
+   [79178, 5414, 5413, 5450, 35734, 35380, 79156, 46952, 11718, 12401] and
+   with no clicks [14614, 376301, 12862, 89764, 34797, 3147, 79141, 375069,
+   375755, 377298] — the same lists as before the change. Products 11718
+   ("Grey throw blanket 11718", SGD 45, image 15) and 12401 ("Black trousers
+   12401", SGD 49, image 10) now have display data. A browser walkthrough
+   (Electronics → product 12862 → related 129045 → home) showed a name,
+   picture and price on every card.
+
+No change to any recommendation or its order; nothing under `results/` was
+modified.
+
+**Independent review (2026-11-09).** The work above was done by another model
+from a written prompt; every claim was re-checked:
+- `results/handoff/20261109T100233Z` in the repository is byte-identical to
+  the zip verified in §6p; `bundle_issues` reports none.
+- The 155 earlier categories are unchanged apart from the added `theme`, and
+  each theme agrees with the category's name; the fingerprint is unchanged.
+- An independent re-implementation of the link voting gives the same theme
+  for all 1,217 categories (2 voting rounds, 23 by `category_id % 4`).
+  Products per theme: Electronics 13%, Kitchen appliances 11%, Clothing 39%,
+  Home furnishings 36% (SASRec's products: 13/11/41/34%).
+- `display_record` reproduces all 6,764 stored records; the three test
+  records are real entries with the export's own token strings.
+- Tests: demo + serving 21 passed; full suite 236 passed plus the 2 known
+  Windows failures (§1).
+- Live demo (export above, `--home-pool 100`): acceptance checks 3 and 4
+  reproduced exactly. On real selection-week visits (every 20th case, 1,000
+  visits through the site's own API), home-page products without display data
+  fell from about 90% (§6p) to 0 of 10,000.
+- Corrections: acceptance check 1's quoted output (fixed above); a stale
+  README sentence saying unprepared items still occur (reworded).
+- Noted, not changed: the startup check skips stored products whose category
+  has no theme (allowed for small test fixtures). Every shipped category has
+  one, so the shipped catalog is fully checked.
+
+---
+
+## 6r. Browsing test of the demo website (2026-11-09)
+
+User request: browse like a real shopper and test the site. Demo on
+`results/handoff/20261109T100233Z` with `--home-pool 100` and the full
+display catalog (§6q), in the desktop app's browser with real mouse clicks
+and key presses (desktop size, plus 375 px phone width).
+
+**Sessions.**
+1. *One interest (electronics):* Electronics → headphones 376301 → related
+   speaker 169683 → logo to home. "For you" shows 10 Electronics products;
+   SASRec's top 100 is all Electronics here, so the four discovery places are
+   other electronics (three speakers, earbuds).
+2. *Two interests (kitchen, then home furnishings), after "Start new session":*
+   Kitchen appliances → kettle 40965 → Home furnishings → cushion 12996 → home.
+   Places 1–7 Home furnishings; places 8–10 from three other categories
+   (Home furnishings collections 781 and 807, Clothing collection 350). The
+   kettle no longer shows (SASRec follows the latest interest, §6p).
+
+**Works.** Category, product, related-product and logo navigation; every card
+has name, picture and price; "Start new session" returns home to "Popular
+now"; Back/Forward do not add clicks (home list identical after back, back,
+forward, forward); reload starts a fresh visit (as the README says); keyboard
+only: Tab shows a visible focus ring, Enter opens a product and counts as a
+click; no horizontal scroll at 375 px; malformed links (`#/item/abc`,
+`#/nonsense`, `#/item/-5`) fall back to home; unknown category shows "No
+products available"; category ranking answers in 0.1–0.3 s (largest category,
+3,851 products: 0.12 s); no server errors; the only browser error is the 404 of
+the deliberately unknown product.
+
+**Findings (not fixed).**
+1. **No interaction logging.** `clew.js` never calls `/log`, and the demo
+   server answers `POST /log` with 404 "unknown path" (it only allows the two
+   `/recommend` POSTs). The plan to judge the home page online (§8.1), and to
+   compare pool 20 with pool 100 on real clicks, cannot run on this site yet.
+2. **Discovery places are not marked.** Nothing shows that places 7–10 are
+   deliberate variety; a T-shirt after rugs looks like a mistake.
+3. **A clicked product jumps up its category.** Clicked at place 15 in
+   Clothing, it was at place 2 on return (the ranker's `session_item_clicks`,
+   known from §6m).
+4. **Reload loses the visit** (clicks live only in page memory).
+5. **Category pages stop at 40 products** ("Show more" goes from 20 to 40 and
+   disappears), even for categories with thousands.
+6. **Unknown product** shows "Product could not be loaded" with a "Try again"
+   button that can never succeed; "not found" would be accurate.
+7. **Blank page for about 1.5 s on first load** (no loading text before the
+   status and categories arrive).
+8. Visual repetition: 16 pictures for 184,047 products (cosmetic).
+
+**Fixes (user request, same day)** in `web/clew.js`, `web/index.html`,
+`web/clew.css`, `src/session_rerank/demo.py`, `scripts/run_demo.py` and
+`.gitignore`. No recommendation code or order changed.
+
+1. **Logging, opt-in.** hct had deliberately closed `/log` in the demo (test
+   `test_clew_serves_only_its_assets_and_disables_visit_logging`), and
+   HANDOFF.md §4 requires a visible notice. So logging is now a start
+   option: `run_demo.py --log` (`make_demo_server(..., log_path=...)`),
+   writing to `logs/interactions.jsonl` (`/logs/` added to `.gitignore`).
+   - Off by default: `/log` is still 404 and hct's test still passes.
+   - When on: `/demo/status` reports `logging: true`, the footer shows a
+     notice, and the page posts `impression` events (page, shown IDs, list
+     source, category or product) and `click` events (product, 1-based
+     position, list source) with a random per-visit ID. The existing
+     whitelist in `api.clean_event` keeps only HANDOFF.md fields; the date is
+     stored, not the time of day.
+2. **Discovery places labelled.** Places in `diverse_positions` get a
+   "Something different" label on the picture, and the list has a one-line
+   caption.
+3. **Clicked products marked.** "Viewed" label on any product clicked in the
+   visit. The ranker's behaviour is unchanged; the label explains the jump.
+4. **Reload keeps the visit.** Clicks, start time and visit ID are kept in
+   `sessionStorage`; time is now measured with `Date.now()` so it survives a
+   reload. "Start new session" makes a new visit ID.
+5. **Category paging.** The page requests the API's maximum (500) once and
+   reveals 20 at a time with "Showing X of Y products"; at the end it says
+   "the top 500 for this visit". The button is disabled while a batch loads.
+6. **Unknown product.** A 404 now shows "Product not found" with a link home,
+   no retry.
+7. **First paint.** `index.html` shows "Loading Clew…" until the first data
+   arrives.
+
+**Checks.**
+- New test `test_visit_logging_is_off_by_default_and_whitelisted_when_on`:
+  closed by default; when on, an event with extra `ip` and `email` fields is
+  stored without them, and an event missing required fields is refused.
+- Demo + serving tests 22 passed; full suite 237 passed plus the 2 known
+  failures; `node --check web/clew.js` passes.
+- In the browser (demo with `--home-pool 100 --log`, real clicks):
+  - Kitchen → kettle → Home furnishings → cushion → home showed the caption
+    and four "Something different" labels in places 7–10.
+  - Reload kept "For you" and both clicks.
+  - The cushion showed "Viewed" first in its category.
+  - "Show more" reached 500 unique products ("Showing 500 of 3,627 products
+    (the top 500 for this visit)").
+  - Unknown product showed "Product not found".
+  - The footer notice was visible.
+  - Reset gave a new visit ID and "Popular now".
+  - At 375 px, no horizontal scroll.
+  - No server errors; the only browser errors were the deliberate 404s.
+- The log written during that visit had 37 events, one visit ID and
+  whitelisted fields only. Both clicks' positions matched the list shown, and
+  personalised home lists were labelled `six_four_sasrec_pool100`. This test
+  log was then deleted.
+- Labels were first placed between picture and name, which misaligned rows;
+  they were moved onto the picture's corner.
+
+**Category label on every card (user request, same day).** The demo names
+and pictures carry no similarity information. The type label is a hash of
+the name tokens; on 1,500 random pairs each, the combined distance is 0.48 for
+two "Wireless earbuds" in category 47, the same as earbuds against a charger
+in that category, and 1.00 for earbuds against a toaster (category 780).
+Variety on screen is therefore shown by the category.
+- Each card now shows its category name, from `categories.json`, in the
+  picture's top-left corner. "Something different" and "Viewed" moved to the
+  bottom-left. Corners use an 8 px radius so two-line names, such as "Home
+  furnishings collection 807" at 375 px, look tidy.
+- Checked in the browser:
+  - kettle → cushion visit: places 1–7 show "Home furnishings"; places 8–10
+    show "Home furnishings collection 781", "…807" and "Clothing collection
+    350";
+  - every card on the home page, a category page and a related list has a
+    category label;
+  - the related list for jacket 35311 shows one "Home furnishings collection
+    137" among nine "Clothing";
+  - no horizontal scroll at 375 px; `node --check` passes.
+
+**Repeated clicks do not move the home page (user report, 2026-11-10).** In
+the user's visit `02c0185f…` from the click log, the clicks were:
+- 3 Clothing (79141, 33475, 11411): home showed 10 × Clothing;
+- 4 Kitchen appliances: home switched to Kitchen;
+- the same three Clothing products again (79141, 11411, 33475, at places 1–3
+  of Clothing because the ranker moves viewed products up, §6m): home stayed
+  on Kitchen.
+
+Cause: `serving.distinct_in_order` keeps each product at its **first** click,
+as the training and evaluation sequences do (`home_page.click_sequences` uses
+`timeframe.min()`). SASRec therefore saw [79141, 33475, 11411, 51096, 58739,
+32971] (clothing, then kitchen). Ordered by **last** click, [51096, 58739,
+32971, 79141, 11411, 33475], the same visit gives 10 × Clothing. Not a coding
+error but a mismatch between the evaluated input rule and how people use the
+site; the category page's viewed-first behaviour makes re-clicks common.
+No change made yet.
+
+**Test of last-click order (user request; declared before the run).**
+`scripts/analysis/home_repeat_order.py` rebuilds the home-page cases from
+the raw click stream, keeping re-clicks:
+- one case before each product's first click, exactly as
+  `evaluation_cases` does, and the same 20,000 sampled cases;
+- the targets are the products first clicked later.
+
+It feeds SASRec either:
+- (A) the current input: products in order of first click (must reproduce
+  the saved run); or
+- (B) products in order of last click.
+
+This is scored for plain SASRec, 6 + 4 over the top 20 (tested) and 6 + 4
+over the top 100 (website), on all cases and on the cases where A and B
+differ.
+
+Rule: the website switches to last-click order if, for the website policy
+(pool 100) on the cases where the order differs, the 95% interval of the
+NDCG@10 difference (B − A) does not lie entirely below zero, on the
+validation week and again on the selection week. The final test is not used.
+
+Results (`results/home_repeat_order/20261109T161500Z_validation`,
+`…/20261109T162400Z_selection`). The rebuilt cases match `click_sequences`,
+and order A reproduces the saved runs exactly. Re-clicks change the order in
+10.6% (validation) and 11.6% (selection) of the 20,000 cases.
+
+| Week | Policy | Cases where the order differs | NDCG@10, first → last order | Difference [95% CI] | Hit rate difference [95% CI] |
+|---|---|---|---|---|---|
+| Validation | SASRec | 2,121 | 0.1452 → 0.1516 | +0.0064 [+0.0008, +0.0122] | +0.021 [+0.010, +0.034] |
+| Validation | 6 + 4, top 20 (tested) | 2,121 | 0.1395 → 0.1457 | +0.0062 [+0.0010, +0.0122] | +0.020 [+0.008, +0.034] |
+| Validation | **6 + 4, top 100 (website)** | 2,121 | 0.1280 → 0.1341 | **+0.0061 [+0.0010, +0.0114]** | +0.017 [+0.005, +0.029] |
+| Selection | SASRec | 2,323 | 0.1059 → 0.1105 | +0.0047 [−0.0004, +0.0094] | +0.015 [+0.002, +0.028] |
+| Selection | 6 + 4, top 20 (tested) | 2,323 | 0.1019 → 0.1063 | +0.0045 [−0.0002, +0.0088] | +0.016 [+0.004, +0.028] |
+| Selection | **6 + 4, top 100 (website)** | 2,323 | 0.0946 → 0.0992 | **+0.0047 [−0.0003, +0.0094]** | +0.012 [+0.000, +0.024] |
+
+Over all 20,000 cases the change is about +0.0005 to +0.0007 NDCG (only the
+re-click cases move). MRR on the reordered cases improves in both weeks with
+intervals above zero (validation +0.008; selection +0.009). **The rule passes
+on both weeks**, and last-click order is better, not just harmless: a
+re-clicked product signals the shopper's current interest.
+
+**Website fix.**
+- `serving.distinct_by_last_click` and `Recommender(..., click_order="last")`;
+  the default stays `"first"`, as trained and tested, so the export, its
+  verification and the final-test numbers are unchanged.
+- `run_demo.py --click-order last`; home lists are labelled `…_last`, and
+  `/demo/status` reports the order.
+- Test `test_click_order_last_moves_reclicked_products_to_the_end`.
+- Demo + serving tests 23 passed; full suite 238 passed plus the 2 known
+  failures.
+- The user's visit `02c0185f…`, replayed in Python and in the browser (9
+  clicks: 3 Clothing, 3 Kitchen, the same 3 Clothing again), now ends with
+  10 × Clothing (9 "Clothing", 1 "Clothing collection 138") instead of
+  Kitchen. The logged home lists read `six_four_sasrec_pool100_last`.
+- The demo now runs with `--home-pool 100 --click-order last --log`.
+- For the report: first-click order (the input rule inherited from the
+  dataset's evaluation) undervalues returning interests; the improvement was
+  measured on the validation and selection weeks only, as a website change
+  after the final test.
+
+---
+
+## 6s. Fact check of the latest poster (2026-11-10)
+
+User request. File checked: `Clew_Demo_Results_A1` (pptx/pdf/png,
+2026-11-10 00:42, made by `create_clew_demo_results_poster.py` with another
+tool, in `Documents\Codex\CP4285_STEPS_2026`).
+
+**Verified correct against the result files and this log.**
+- Format: 594 × 841 mm. The QR code decodes to
+  `https://uvents.nus.edu.sg/event/29th-steps/vote`.
+- Data facts: median 1 click per April training session, 95% category
+  browses, 57% of clicks below place 50 (§2).
+- Evaluation weeks, including "SASRec trained February–April".
+- The three paths: LightGBM top 10; SASRec top 20 → 6 + 4; item-kNN top 20 →
+  80/20. Popularity fallback; purchase features and graded labels.
+- Final test, against `results/confirmation/20261108T193024Z_confirmation/final_table.csv`:
+  - category 0.167 → 0.184, +0.018 [0.005, 0.032], 939 queries;
+  - session 0.098 → 0.111, +0.014 [0.010, 0.017];
+  - related products 0.093 → 0.095, +0.003 [−0.001, 0.006], "no clear
+    ranking gain".
+  - Bar heights are proportional.
+- Selection-week variety:
+  - SASRec → 6 + 4: ILD 0.517 → 0.560 (+8.2%), NDCG 0.122 → 0.118 (−3.3%);
+  - item-kNN → 0.8: ILD 0.620 → 0.652 (+5.2%), NDCG 0.101 → 0.097 (−3.3%).
+- Demo box, against §6p and §6r:
+  - pool 20 → 100: new category 32% → 79%, later click in the last four
+    12.2% → 7.5%, NDCG 0.118 → 0.110;
+  - last-click order: 2,323 cases, 0.0946 → 0.0992, "inconclusive on
+    selection".
+- "Views: no measurable ranking gain" (§6) and "Adaptive variety: did not
+  beat a tuned fixed balance" (§3) are correct.
+- The final test is described neutrally; no other use of those dates is
+  mentioned.
+
+**To correct or decide.**
+1. "Supervisor: Kan Min Yen" was added back; hct's poster spec asked for
+   the supervisor to be removed. Usual spelling: Kan Min-Yen.
+2. "Candidate filters: Two-tower ≈ popularity" overstates the two-tower. §4
+   says it "remains slightly below plain popularity" (top-10 NDCG 0.172 vs
+   0.201 on the logged list; 0.135 vs 0.164 on the whole category).
+   Suggested: "Two-tower below popularity".
+3. The demo box does not say that pool 100 was chosen after the final test
+   and failed its pre-set check (4.8% < 7% discovery clicks, §6p).
+   Suggested: "website setting, chosen after the final test".
+4. The demo box reports last-click order only as "inconclusive on
+   selection"; it was also positive on validation (+0.006 [+0.001, +0.011])
+   and passed its rule on both weeks.
+5. No references (the earlier poster cited SASRec, LightGBM and the
+   Diginetica data) — check whether the course requires them.
+6. Author order differs from the UVENTS page (Ho Chi Thanh first there).
+
+**User decision: fix 3, remove 4; 1, 2, 5 and 6 left as they are.**
+- In `create_clew_demo_results_poster.py`, the demo box's two repeat-click
+  lines ("Most recent click order · 2,323 changed cases · NDCG 0.0946 →
+  0.0992" and "…inconclusive on selection") were replaced by "Website
+  setting, chosen after the final test." and "The final-test results below
+  use the tested pool of 20."
+- The now unused reading of `home_repeat_order` and its speaker-note
+  sentences were removed, and the notes now state that the demo box is a
+  post-final-test website setting.
+- Rebuilt with the Codex runtime Python, which has `reportlab` and
+  `pypdfium2`. The first rebuild said "results above"; it was corrected to
+  "below" and rebuilt.
+- Checked: 594 × 841 mm, 397 words, the new lines present, no repeat-click
+  text left, the rest unchanged.
+- Earlier files were kept in `previous_versions/…_before_fix_2026-11-10.*`.
+
+**Committed 2026-11-10** on `refactor/readable-main-pipeline` and pushed
+(user request). The commit contains:
+- the work of §6p–§6s: the home-page analysis scripts, the website options
+  (`--home-pool`, `--click-order`, `--log`), the full display catalog, the
+  website fixes and the tests;
+- this log.
+
+Not committed:
+- `figures/clew_showcase.gif` (origin unknown);
+- `logs/` (visitor clicks; git-ignored);
+- `results/` (git-ignored);
+- the STePS and poster files, which live outside the repository.
+
+---
+
+## 7. Decisions
+
+| Date | Decision | Evidence |
+|---|---|---|
+| 2026-11-08 | **Category-page ranker adds window popularity features; lead candidate is `rank_xendcg` with those features.** Position correction and learning rate 0.02 are not adopted for now. | §6a: popularity +0.03 (intervals above zero); xendcg is the only variant ahead of the popularity sort in every model/statistic. To be confirmed on selection data (Phase 5). |
+| 2026-11-09 | **Home page switches to SASRec + 6 + 4** after the first click (popularity before it), replacing item-kNN + fixed 0.8 (user decision, frozen before the selection week is opened). Model: SASRec dim 64, 2 blocks, dropout 0.5, trained on February–April, epoch 9 (`results/sequence_models/20261108T175008Z_validation/sasrec.pt`); 6 + 4 over its top 20 products. | §6j: best of a 12-setting grid; the declared rule (most ILD within 5% NDCG loss) picks 6 + 4 (−3.6% NDCG, +0.041 ILD); +0.016 NDCG over item-kNN + fixed 0.8 (interval above zero) but less diverse (ILD 0.554 vs 0.667). Matches the brief's 6 + 4. |
+| 2026-11-08 | **Home page stays on item-kNN + fixed alpha 0.8 for now**, although SASRec is more accurate on validation (user decision). SASRec to be retested with more training data. | §6j: SASRec NDCG +0.008 over item-kNN but ILD 0.555 vs 0.667 for the frozen policy; one untuned setting. |
+| 2026-11-08 | **Home page uses item-kNN on the session's clicks with fixed alpha 0.8 over a 20-product pool** after the first click, popularity before it (user decision, replaces the brief's two-tower); frozen before the selection week is opened. | §6g: item-kNN beats the session two-tower (NDCG +0.021, interval above zero) and is far more diverse; fixed 0.8 costs −3.0% NDCG for +0.039 ILD. |
+| 2026-11-08 | **"You may also like" uses item-kNN with fixed alpha 0.8 over a 20-product pool** (user decision, replaces the brief's 6 + 4 for this page); frozen before the selection week is opened. | §6e: within the declared 5% NDCG rule (−4.0%), +0.033 ILD; 6 + 4 gave twice the diversity at −5.8%. Speed is equal. |
+| 2026-11-08 | **Category-page choices frozen; `purchase_session` (popularity + xendcg, 50k) is the category-page ranker.** | §6d: frozen before the selection split was read; selection confirms LightGBM over both baselines; the declared rule picks `purchase_session` by 0.0001 NDCG (a practical tie). |
+| 2026-11-08 | **Item-kNN on session co-clicks is the classical CF baseline** (and the planned "You may also like" model); MRR@10 is reported with NDCG@10 and Recall@10. | §6c: LightGBM beats item-kNN by +0.025 NDCG (interval above zero); item-kNN beats popularity only in direction. |
+| 2026-11-08 | **Train the category-page ranker on 50,000 queries** (data folder `results/learning_curve_v2/queries_50000`); keep `popularity_xendcg` as the lead. Position correction is dropped. | §6b: 50k adds +0.008 to +0.021 over 10k; at 50k all variants beat the popularity sort by about +0.03 and differ from each other by less than 0.01. All-data training does not fit in the free memory yet. |
+| 2026-11-08 | **Final product: a recommendation website** with a home page, category pages and an item page with "You may also like" (user decision; §8.1). | Product goal set by the team. |
+| 2026-11-08 | **Cold start uses popularity**, not collaborative filtering (user decision): popular overall or trending on the home page, popular within the category on category pages. Item-to-item CF is used on the item page, where the viewed item is the signal. | An anonymous first visit has no user ID and no interaction for CF to use; two-thirds of validation queries have no session history (§2). |
+| 2026-11-08 | **The home page is evaluated online**: the team's website logs interactions (user decision). An offline next-item proxy remains optional. | Diginetica has no home-page impressions (§8.1). |
+| 2026-11-08 | **Demo product names are generated by AI** (user decision). They are display-only: models, features and metrics keep using the anonymised token IDs. | The catalog has no real names or images (§8.1). |
+| 2026-11-08 | **"You may also like" uses clicks only** (user decision). As understood: a clicked product is a positive; products not clicked (or never shown) are not treated as negatives, neither in training nor in evaluation. To be confirmed by the user. | Overrides the earlier proposal to use views for this page (§8.1, point 4). |
+| 2026-11-08 | **Text-search queries are excluded from training for now** (user decision). | 5% of queries; both the two-tower and popularity fail on them (§4). |
+| 2026-11-08 | **Ranker features use clicks only (no product views).** | §6: no measurable effect; simpler. Applies to the category-page ranker from Phase 2; Experiments A–C used all events. Views stay available for "You may also like", whose signal is product-page visits (§8.1). |
+| 2026-11-08 | **Train the ranker on all sessions**, not only multi-click sessions. | §6: multi-click training loses ~0.01 NDCG, mostly on queries without history. |
+| 2026-11-08 | Keep LightGBM LambdaMART as the main relevance model. | Popularity order ≈ LightGBM (§4); legacy benchmark: SASRec 0.204 vs tree 0.231, GRU4Rec fusion added nothing (README "Earlier reported results"). |
+| 2026-11-08 | Do not use NeuMF. | Needs a learned embedding per user/session ID; 62–70% of rows have no user ID, the study is anonymous by design, and validation sessions are always new. The two-tower plays that role for unseen sessions. |
+| 2026-11-08 | GRU4Rec only as an optional, time-boxed extra feature, trained on ≥ 2-click sessions. | Only ~⅓ of queries have earlier history; legacy fusion showed no gain. |
+| 2026-11-08 | RankNet/BPR are treated as loss comparisons, not new models. | LambdaMART is RankNet's pairwise loss with NDCG weighting; the two-tower already uses a BPR-style loss. |
+| 2026-11-08 | Do not randomise first-query lists. | §2: first-query clicks are as focused as later ones; random costs ⅔ of NDCG. |
+| 2026-11-07 | K1 = 500 on the logged list is a no-op. | Logged lists hold at most 200 products; use K1 ≤ 50–100 as a real relevance guard, or a full-category filter (§5). |
+
+---
+
+## 8. Plan and status
+
+| Phase | Content | Status |
+|---|---|---|
+| 0 | Windows training fix; commit current work; data-only "prepare all" step | **Done.** Windows fix; `prepare-data` (§6b). Committed 2026-11-08 on branch `refactor/readable-main-pipeline` in two commits: `a9b9a5d` (the earlier K1-filter edits and the team handover) and `75367ca` (all work in this log); both pushed to `origin` the same day |
+| 1 | Views ablation; multi-click training filter | **Done** (§6, §7) |
+| 2 | Relevance model: full-April popularity in LightGBM; position debias (LightGBM `position`); `lambdarank` vs `rank_xendcg`; RankNet MLP check; optional GRU4Rec feature; lower learning rate; scale to 50k and all queries | **Steps 1–2 done** (§6a: popularity, position, xendcg, learning rate; §6b: 50k queries). Left: all-data training (needs less memory per row or a larger machine); RankNet MLP check; optional GRU4Rec feature |
+| 3 | Filter: retrain two-tower on all data; compare with popularity filter using the Phase 2 ranker; choose K1 and whether never-shown products are allowed | Pending |
+| 4 | Diversity: fixed-alpha curve vs adaptive policies (session variety, query position, category switch); declared rule: most ILD within 5% NDCG loss | **Item page evaluated on validation** (§6e); fixed alpha 0.8 (K1 = 20) chosen and frozen 2026-11-08. **Home page evaluated on validation** (§6g); item-kNN + fixed alpha 0.8 chosen and frozen 2026-11-08, **replaced 2026-11-09 by SASRec + 6 + 4** (§6j, confirmed on selection) |
+| 5 | Choose on selection, freeze, evaluate confirmation; session-bootstrap intervals by segment | **All three pages frozen and evaluated on selection** (§6d, §6f, §6h, §6j). **Confirmation done 2026-11-09 (§6l)**: category and home pages confirmed; item page ties category popularity on NDCG, wins on MRR and variety |
+
+### 8.0 Course requirements checklist (assessed 2026-11-08)
+
+| Requirement | Already in place | Gap | Size |
+|---|---|---|---|
+| Well-defined user problem and objective | Research question (§3 of the handover), product brief (§8.1), per-page metrics | One consolidated statement for the report. The original "adaptive diversity" hypothesis was not supported (§3, §2), so the objective should read as relevance with controlled variety, with adaptation as a tested-and-rejected idea | Writing |
+| At least one classical baseline (CF, MF) | **Done 2026-11-08 (§6c): item-kNN on session co-clicks**, plus popularity sort and the site's order | Originally: no collaborative-filtering model under the current protocol. The older pipeline's session co-occurrence graph and GRU4Rec/SASRec used persistent-user features and another protocol. Needed: item-kNN on session co-clicks (also the "You may also like" model). MF needs a learned vector per user or session, which new anonymous sessions do not have; its item factors can still be used item-to-item | Build |
+| At least one neural or advanced model | **SASRec (transformer) adopted for the home page 2026-11-09 (§6j, selection +0.016 NDCG over item-kNN + fixed 0.8)**; GRU4Rec and the two-tower evaluated; LightGBM LambdaMART/xendcg (advanced) on category pages | Re-evaluate the two-tower under the final data choices (clicks only, 50k) in the same table as the other models | Small |
+| Rigorous offline evaluation (NDCG, Recall@K, MRR) | NDCG@10, Recall@10, **MRR@10 (added 2026-11-08, §6c)**, recall at K1, ILD, session-bootstrap intervals, segments; one table of site order, popularity, item-kNN and LightGBM on identical queries (§6c); **held-out selection table for category pages (§6d, 2026-11-08)** | **Done 2026-11-09: confirmation for all three pages (§6l, one final table).** Earlier: confirmation (final held-out test) still sealed until the other pages are frozen. Originally: **everything was validation-only:** selection and confirmation (Phase 5) are needed for a held-out result. No single table compares every model under one protocol | Build |
+| Error analysis of failure modes | **Done 2026-11-08 (§6i)** for all three pages on selection data. Earlier, scattered findings: cold queries tie popularity, text search fails, never-shown products unjudgeable, token ILD ceiling, hyperparameter sensitivity, category ID dominates splits | A systematic analysis of the final model: where it loses to popularity (categories, deep-ranked clicks, unpopular or new products, session length), with example lists | Build + writing |
+| Ethical analysis | **Done 2026-11-09 (§6k, `ETHICS.md`)**: exposure measured on all three pages; written section drafted. Originally: anonymous design (no user IDs); notes on position bias and click-only selection effect | Originally not written. Topics with measurable parts: popularity bias and exposure concentration (coverage, Gini of recommended products), position bias in logged clicks, privacy of the website's interaction logging, stakeholder impact (long-tail sellers, shoppers), AI-generated demo names | Measurement + writing |
+
+Proposed order: (1) item-kNN baseline and MRR (**done**, §6c), (2) one comparison table on held-out
+data (Phase 5; **selection done for all three pages**, §6d/§6f/§6h), (3) error analysis (**done**, §6i), (4) ethics with exposure measurements (**done**, §6k),
+(5) the written problem statement.
+
+### 8.1 Product surfaces (user brief, 2026-11-08; open points 1–4 resolved)
+
+The user's brief for the website, and the proposed data/model mapping:
+
+| Page | User brief | Candidate pool | Cold start (no interaction yet) | After interaction | Diversity | Offline evaluation in Diginetica |
+|---|---|---|---|---|---|---|
+| Home page | No hard filter; cold start by collaborative filtering; then 6 relevance + 4; needs two-tower | Whole catalog | Popularity / trending (proposed: CF needs at least one interaction or user ID) | Two-tower retrieval → LightGBM-style scoring → 6 + 4 | 6 + 4 | No home-page impressions exist; proxy: predict the session's next clicked/viewed products from its history |
+| Category page | Hard filter; cold start by CF; then rank by relevance; no two-tower | Products of the category | Popularity within the category | LightGBM ranker (Phase 2) | None (relevance only) | Directly the dataset's category-page queries (95% of queries): click NDCG@10 |
+| Item page, "You may also like" | Diversity based on relevance from other pages; 6 + 4 | Products similar to / co-clicked with the viewed item | Item-to-item co-clicks (the item itself is the signal) | Same, personalised by session history | 6 + 4 | Clicks only: did the list contain products the shopper clicked later in the session; unclicked products are not penalised |
+
+Points raised for the user (open):
+
+1. *Resolved 2026-11-08: cold start uses popularity.* "Collaborative filtering"
+   cannot work with zero interactions for an anonymous visitor; at cold start
+   only aggregate signals exist (popularity, trending, category popularity).
+   Item-to-item CF ("shoppers who viewed X also viewed Y") needs one
+   interaction, which the item page always has.
+2. *Resolved 2026-11-08: the website logs interactions and the home page is
+   evaluated online.* The home page has no logged impressions in Diginetica, so
+   offline it could only be judged by a next-item proxy.
+3. *Resolved 2026-11-08: AI-generated product names for the demo, display
+   only.* The catalog is anonymised (IDs, category IDs, price bands, name token
+   IDs; no names or images).
+4. *Resolved 2026-11-08: "You may also like" uses clicks only, with no penalty
+   for products that were not clicked* (replaces the earlier proposal to use
+   views). The item-to-item signal is therefore co-clicks within a session;
+   48.5% of training-pool sessions have two or more clicks (§2).
+
+---
+
+## 9. Known issues and caveats
+
+- **Never-shown products cannot be judged offline.** NDCG treats them as
+  misses; report the shown-only result next to any full-category result.
+- **Purchases are too rare for decisions:** 10 purchase-bearing validation
+  queries; one query moves purchase recall by 0.1.
+- **Text searches** are 5% of queries (25 in validation); the two-tower and
+  popularity both fail on them.
+- **Training data contains only sessions with a click** (§2), a selection
+  effect to state in the report.
+- **Two-tower popularity and history still use views** (raw clicks + views;
+  session history of clicks and views). Align them with the clicks-only
+  decision when the tower is retrained in Phase 3. Session variety H in the
+  adaptive policies also uses clicks and views.
+- Two older pipeline tests fail on Windows at a long temporary path (§1).
+- A small reranking ILD (combined 0.46–0.49) reflects the token ceiling and the
+  near-zero category spread of logged lists (§2), not a broken metric.
+
+---
+
+## 10. Commands and files
+
+```powershell
+uv run main.py alpha-sweep --trained-run results/learning_curve/queries_10000
+uv run main.py two-tower --trained-run results/learning_curve/queries_10000
+uv run main.py filter-pipeline --trained-run results/learning_curve/queries_10000 --two-tower-run results/two_tower/RUN
+uv run main.py event-ablation --trained-run results/learning_curve/queries_10000
+uv run main.py ranker-phase2 --trained-run results/learning_curve/queries_10000
+uv run main.py prepare-data --queries 50000 --curve-root results/learning_curve_v2
+uv run main.py ranker-phase2 --trained-run results/learning_curve_v2/queries_50000 --phase2-config config/ranker_phase2_50k.json
+uv run main.py ranker-phase2 --trained-run results/learning_curve_v2/queries_50000 --phase2-config config/ranker_lead_50k.json
+uv run main.py item-knn --trained-run results/learning_curve_v2/queries_50000
+uv run main.py heldout
+uv run main.py ymal
+uv run main.py ymal --ymal-config config/ymal_selection.json
+uv run main.py home-page
+uv run main.py home-page --home-config config/home_page_selection.json
+uv run main.py error-analysis
+uv run main.py exposure
+uv run main.py confirmation
+uv run main.py handoff
+uv run main.py serve --handoff results/handoff/STAMP --port 8000
+uv run python scripts/report/make_figures.py
+uv run python scripts/report/audit_report.py
+uv run main.py sequence-models
+uv run python scripts/analysis/session_lengths.py data/raw OUTPUT_FOLDER
+uv run python scripts/analysis/click_view.py data/raw
+```
+
+| Output file | Contents |
+|---|---|
+| `alpha_sweep/…/summary.csv` | Mean NDCG/ILD/alpha per model, policy and history group |
+| `alpha_sweep/…/gap_vs_fixed_curve.csv` | Adaptive minus fixed-curve NDCG at equal ILD, with CI |
+| `alpha_sweep/…/history_diagnostics.csv`, `adaptive_alpha_spread.csv` | Fallback shares, H and alpha distributions |
+| `two_tower/…/retrieval_summary.csv` | Recall at each K1 by pool, method and segment |
+| `two_tower/…/top10_summary.csv` | NDCG@10, ILD@10 and never-shown share of each method's top 10 |
+| `two_tower/…/item_embeddings.npy`, `item_ids.npy` | Product vectors for use as a filter |
+| `filter_pipeline/…/summary.csv`, `difference_vs_logged.csv` | End-to-end NDCG/ILD and differences with CI |
+| `event_ablation/…/summary.csv`, `difference_vs_current.csv` | Phase 1 results by segment, with CI |
+| `event_ablation/…/feature_gain.csv`, `audit.json` | Feature importance and per-fit settings |
+| `ranker_phase2/…/summary.csv`, `differences.csv` | Phase 2 NDCG by segment, variant and model; differences vs `base` and vs the popularity sort |
+| `ranker_phase2/…/validation_per_query.parquet` | Per-query NDCG (and MRR from §6c on) for every variant and reference, with query type and history flag |
+| `item_knn/…/summary.csv`, `differences.csv` | NDCG/Recall/MRR of every method by segment; differences vs popularity sort and vs item-kNN |
+| `item_knn/…/knn_settings.json` | Basket, similarity and coverage statistics |
+| `heldout/…/frozen_choices.json`, `selection_choice.json` | Choices frozen before opening the split; the declared rule's outcome |
+| `heldout/…/summary.csv`, `differences.csv`, `selection_per_query.parquet` | Held-out NDCG/Recall/MRR by method and segment, with intervals |
+| `heldout/…/click_session.txt`, `purchase_session.txt`, `selection.sqlite` | Frozen models and the rebuilt selection split |
+| `ymal/…/summary.csv`, `differences.csv`, `per_page.parquet` | Item-page relevance and diversity by method; differences vs category popularity and vs relevance only |
+| `home_page/…/summary.csv`, `differences.csv`, `per_case.parquet` | Home-page relevance and diversity by method and clicks so far; differences vs popularity and vs the two-tower |
+| `home_page/…/session_two_tower.pt`, `training_log.csv` | Saved session two-tower (reused by a selection run) and its epoch log |
+| `sequence_models/…/summary.csv`, `differences.csv`, `per_case.parquet`, `sasrec.pt`, `gru4rec.pt`, `vocabulary_rows.npy` | SASRec/GRU4Rec results joined with the home-page methods; saved models and product vocabulary |
+| `error_analysis/…/*_breakdown.csv`, `category_pages_by_category.csv`, `category_pages_worst_losses.csv`, `overview.json` | Win/tie/loss and mean NDCG per case property for each page; headline shares |

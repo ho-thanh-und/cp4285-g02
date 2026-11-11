@@ -1,0 +1,37 @@
+#!/bin/bash
+# PBS Pro array job: one sequence-model setting per task (see CLUSTER_GUIDE.md).
+# Use this instead of sequence_grid.slurm if your cluster runs PBS.
+# Submit from the repository root:  qsub scripts/cluster/sequence_grid.pbs
+#
+# ---- Adjust these for your cluster ------------------------------------------
+#PBS -N cp4285-seq
+#PBS -J 1-12
+#PBS -l select=1:ncpus=8:mem=16gb
+#PBS -l walltime=03:00:00
+#PBS -j oe
+#PBS -o logs/
+##PBS -q CHANGE_ME                   # remove one '#' and set your queue if required
+##PBS -P CHANGE_ME                   # remove one '#' and set your project if required
+# -----------------------------------------------------------------------------
+
+set -euo pipefail
+cd "${PBS_O_WORKDIR}"
+mkdir -p logs
+
+# Activate the Miniconda environment created in CLUSTER_GUIDE.md step 3.
+# Set CONDA_SH if Miniconda is not installed in ~/miniconda3.
+set +u
+source "${CONDA_SH:-$HOME/miniconda3/etc/profile.d/conda.sh}"
+conda activate "${CONDA_ENV:-cp4285}"
+set -u
+PYTHON="${PYTHON:-python}"
+CONFIG=$(sed -n "${PBS_ARRAY_INDEX}p" config/sequence_grid/grid_index.txt)
+if [ -z "${CONFIG}" ]; then
+    echo "No config for array task ${PBS_ARRAY_INDEX}" >&2
+    exit 1
+fi
+
+export OMP_NUM_THREADS=8
+export MKL_NUM_THREADS=8
+echo "Task ${PBS_ARRAY_INDEX} on $(hostname): ${CONFIG}"
+"${PYTHON}" main.py sequence-models --sequence-config "${CONFIG}"
